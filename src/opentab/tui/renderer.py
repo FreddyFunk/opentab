@@ -41,6 +41,7 @@ from opentab.formatting import (
     iso_to_local,
     money,
     money_label,
+    money_whole,
     pad,
     pct,
     relative_age,
@@ -211,6 +212,8 @@ class Renderer:
         self._ruled_body_start: int | None = None
         # Header identity is textual because independently built boxes are later stacked.
         self._box_headers: set[str] = set()
+        # Years/Months/Days column widths, measured once per frame.
+        self._period_cols: tuple[int, int, int] | None = None
 
     def __getattr__(self, name: str):
         return getattr(self.app, name)
@@ -360,27 +363,49 @@ class Renderer:
     ) -> None:
         self.paint_cursor_row(stdscr, y, x, line, width)
 
-    def year_row_text(self, year: YearSummary, marker: str) -> str:
+    # The three panels stack in one column, so they share a grid: the label field holds a
+    # full date, and each numeric column is measured, not reserved, so no row carries
+    # padding for a digit none of the data has.
+    PERIOD_LABEL_W = len("2026-06-01")
+
+    def period_columns(self) -> tuple[int, int, int]:
+        if self._period_cols is None:
+            rows = [*self.years, *self.months, *self.panel_days]
+            self._period_cols = (
+                max((len(money_whole(r.cost)) for r in rows), default=1),
+                max((len(human_tokens(r.tokens)) for r in rows), default=1),
+                max((len(str(r.workflows)) for r in rows), default=1),
+            )
+        return self._period_cols
+
+    def period_row_width(self) -> int:
+        # marker, label, the three measured columns, and the " ses" unit.
+        cost_w, token_w, count_w = self.period_columns()
+        return 2 + self.PERIOD_LABEL_W + 1 + cost_w + 1 + token_w + 1 + count_w + 4
+
+    def _period_row_text(
+        self, label: str, marker: str, cost: float, token_count: int, sessions: int
+    ) -> str:
+        cost_w, token_w, count_w = self.period_columns()
         return (
-            f"{marker} {year_label(year.year):<9} {money(year.cost):>9} "
-            f"{human_tokens(year.tokens):>7} {year.workflows:>3} ses"
+            f"{marker} {label:<{self.PERIOD_LABEL_W}} {money_whole(cost):>{cost_w}} "
+            f"{human_tokens(token_count):>{token_w}} {sessions:>{count_w}} ses"
+        )
+
+    def year_row_text(self, year: YearSummary, marker: str) -> str:
+        return self._period_row_text(
+            year_label(year.year), marker, year.cost, year.tokens, year.workflows
         )
 
     def month_row_text(self, month: MonthSummary, marker: str) -> str:
-        return (
-            f"{marker} {month.month} {money(month.cost):>9} "
-            f"{human_tokens(month.tokens):>7} {month.workflows:>3} ses"
-        )
+        return self._period_row_text(month.month, marker, month.cost, month.tokens, month.workflows)
 
     def day_row_text(self, day: DaySummary, marker: str) -> str:
-        return (
-            f"{marker} {day.day} {money(day.cost):>9} "
-            f"{human_tokens(day.tokens):>7} {day.workflows:>3} ses"
-        )
+        return self._period_row_text(day.day, marker, day.cost, day.tokens, day.workflows)
 
     @staticmethod
     def project_name_width(width: int) -> int:
-        return max(8, width - 41)
+        return max(8, width - 38)
 
     def project_row_text(self, project: ProjectSummary, marker: str, width: int) -> str:
         name_width = self.project_name_width(width)
@@ -389,7 +414,7 @@ class Renderer:
             name = f"× {name}"
         return (
             f"{marker} {pad(name, name_width)} "
-            f"{money(project.cost):>9} {human_tokens(project.tokens):>7} "
+            f"{money_whole(project.cost):>7} {human_tokens(project.tokens):>6} "
             f"{project.workflows:>3} ses {project.subagents:>6} subs"
         )
 
@@ -398,8 +423,8 @@ class Renderer:
         name_width = self.project_name_width(width)
         return (
             f"  {pad('TOTAL', name_width)} "
-            f"{money(sum(p.cost for p in rows)):>9} "
-            f"{human_tokens(sum(p.tokens for p in rows)):>7} "
+            f"{money_whole(sum(p.cost for p in rows)):>7} "
+            f"{human_tokens(sum(p.tokens for p in rows)):>6} "
             f"{sum(p.workflows for p in rows):>3} ses {sum(p.subagents for p in rows):>6} subs"
         )
 
@@ -407,27 +432,27 @@ class Renderer:
         name_width = self.project_name_width(width)
         return (
             f"  {self.project_sort_heading('project', 'Project'):{name_width}} "
-            f"{self.project_sort_heading('cost', 'Cost'):>9} "
-            f"{self.project_sort_heading('tokens', 'Tokens'):>7} "
+            f"{self.project_sort_heading('cost', 'Cost'):>7} "
+            f"{self.project_sort_heading('tokens', 'Tokens'):>6} "
             f"{self.project_sort_heading('sessions', 'Ses'):>7} "
             f"{self.project_sort_heading('subagents', 'Subagents'):>11}"
         )
 
-    def list_width(self, rows_text: list[str], width: int) -> int:
-        content = max((len(r) for r in rows_text), default=20)
-        return max(24, min(content + 3, max(24, width - 44)))
+    def list_width(self, content: int, width: int) -> int:
+        # Content plus the two box borders, never past the detail pane's 44-column floor.
+        return max(24, min(content + 2, max(24, width - 44)))
 
     def projects_left_width(self, width: int) -> int:
         # Leave at least half the screen, and 44 columns, for detail.
         longest = max(
             (display_width(short_path(p.directory, 999)) for p in self.projects), default=8
         )
-        natural = max(longest, len("Project")) + 42  # marker + Cost/Tokens/Ses/Subagents
+        natural = max(longest, len("Project")) + 39  # marker + Cost/Tokens/Ses/Subagents
         return max(24, min(natural, width // 2, max(24, width - 44)))
 
     @staticmethod
     def machine_name_width(width: int) -> int:
-        return max(8, width - 30)
+        return max(8, width - 27)
 
     @staticmethod
     def machine_badge(machine: MachineSummary) -> str:
@@ -441,18 +466,18 @@ class Renderer:
         name = shorten(f"{self.machine_badge(machine)} {machine.name}", name_width)
         return (
             f"{marker} {pad(name, name_width)} "
-            f"{money(machine.cost):>9} {human_tokens(machine.tokens):>7} "
+            f"{money_whole(machine.cost):>7} {human_tokens(machine.tokens):>6} "
             f"{machine.workflows:>3} ses"
         )
 
     def machine_header_text(self, width: int) -> str:
         name_width = self.machine_name_width(width)
-        return f"  {'Machine':{name_width}} " f"{'Cost':>9} {'Tokens':>7} {'Ses':>6}"
+        return f"  {'Machine':{name_width}} " f"{'Cost':>7} {'Tokens':>6} {'Ses':>7}"
 
     def machines_left_width(self, width: int) -> int:
         longest = max((display_width(m.name) for m in self.machines), default=8)
         # Include the badge and its space inside the name field budget.
-        natural = max(longest, len("Machine")) + 34
+        natural = max(longest, len("Machine")) + 31
         return max(24, min(natural, width // 2, max(24, width - 44)))
 
     def browse_left_width(self, width: int) -> int:
@@ -460,11 +485,8 @@ class Renderer:
             return self.machines_left_width(width)
         if self.browse_mode == "projects":
             return self.projects_left_width(width)
-        rows = [self.year_row_text(yr, ">") for yr in self.years]
-        rows += [self.month_row_text(m, ">") for m in self.months]
-        rows += [self.day_row_text(d, ">") for d in self.panel_days]
         # Reserve the spend-bar lane without starving the detail pane below 44 columns.
-        base = self.list_width(rows, width)
+        base = self.list_width(self.period_row_width(), width)
         return max(24, min(base + BAR_CELLS + 2, max(24, width - 44)))
 
     def draw_time_panels(
@@ -481,10 +503,10 @@ class Renderer:
             stdscr, top + years_h + months_h, 0, days_h, left, active=focus == "days"
         )
 
-    @staticmethod
-    def bar_lane(w: int) -> tuple[int, int]:
-        # Keep bars outside row highlights; omit the lane when the panel is too narrow.
-        if w < 46:
+    def bar_lane(self, w: int) -> tuple[int, int]:
+        # Keep bars outside row highlights, and drop the lane rather than clip a row: on a
+        # cramped screen the numbers matter more than their bars.
+        if (w - 2) - (BAR_CELLS + 2) < self.period_row_width():
             return 0, w - 2
         return BAR_CELLS, (w - 2) - (BAR_CELLS + 2)
 
@@ -656,6 +678,7 @@ class Renderer:
         self.sort_regions = []
         self._line_sort_headers = {}
         self._box_headers = set()
+        self._period_cols = None
         # Paint side channels must not color geometry from an earlier frame.
         self._token_runs: dict[str, list[tuple[int, int, int]]] = {}
         self._tool_tree_runs = {}
@@ -1416,8 +1439,8 @@ class Renderer:
         return curses.A_NORMAL
 
     def money_attr(self, cost_text: str) -> int:
-        # $0.00 means zero/unpriced; <$0.01 is real spend and must remain emphasized.
-        if cost_text == "$0.00":
+        # $0.00/$0 mean zero/unpriced; <$0.01 is real spend and must remain emphasized.
+        if cost_text in ("$0.00", "$0"):
             return curses.color_pair(1)
         return curses.color_pair(3) | curses.A_BOLD
 
@@ -1751,7 +1774,7 @@ class Renderer:
         for row_y, year in enumerate(rows[start : start + visible], y + 2):
             selected = start + row_y - (y + 2) == self.year_index
             marker = ">" if selected else " "
-            cost = money(year.cost)
+            cost = money_whole(year.cost)
             tok = human_tokens(year.tokens)
             text = self.year_row_text(year, marker)
             if selected and active:
@@ -1800,7 +1823,7 @@ class Renderer:
         for row_y, month in enumerate(rows[start : start + visible], y + 2):
             selected = start + row_y - (y + 2) == self.month_index
             marker = ">" if selected else " "
-            cost = money(month.cost)
+            cost = money_whole(month.cost)
             tok = human_tokens(month.tokens)
             text = self.month_row_text(month, marker)
             if selected and active:
@@ -1854,7 +1877,7 @@ class Renderer:
         for row_y, project in enumerate(rows[start : start + visible], y + 3):
             selected = start + row_y - (y + 3) == self.project_index
             marker = ">" if selected else " "
-            cost = money(project.cost)
+            cost = money_whole(project.cost)
             tok = human_tokens(project.tokens)
             text = self.project_row_text(project, marker, w - 2)
             if selected and active:
@@ -1957,7 +1980,7 @@ class Renderer:
                     row_y,
                     x + 1,
                     text,
-                    money(machine.cost),
+                    money_whole(machine.cost),
                     human_tokens(machine.tokens),
                     w - 2,
                 )
@@ -2209,7 +2232,7 @@ class Renderer:
         for row_y, day in enumerate(rows[start : start + visible], y + 2):
             selected = start + row_y - (y + 2) == self.day_index
             marker = ">" if selected else " "
-            cost = money(day.cost)
+            cost = money_whole(day.cost)
             tok = human_tokens(day.tokens)
             text = self.day_row_text(day, marker)
             if selected and active:

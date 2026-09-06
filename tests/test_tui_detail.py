@@ -1043,7 +1043,8 @@ def test_project_header_aligns_with_project_rows():
     header = app.renderer.project_header_text(80)
     row = app.renderer.project_row_text(project, ">", 80)
 
-    assert header.index("Cost") + len("Cost v") == row.index("$12.34") + len("$12.34")
+    # Browse columns drop cents: $12.34 renders as $12.
+    assert header.index("Cost") + len("Cost v") == row.index("$12") + len("$12")
     assert header.index("Tokens") + len("Tokens") == row.index("1.5k") + len("1.5k")
     assert header.index("Ses") + len("Ses") == row.index("  1 ses") + len("  1 ses")
     assert header.index("Subagents") + len("Subagents") == row.index("     0 subs") + len(
@@ -1158,6 +1159,35 @@ def test_projects_panel_width_is_content_aware_and_bounded():
     assert w < 160 - 44  # not maxed to the screen
     # A short-path list sizes down to its own (smaller) needs.
     assert narrow.renderer.projects_left_width(160) < w
+
+
+def test_time_panels_share_one_column_grid_and_keep_the_bar_lane():
+    app = app_with(
+        [
+            workflow("a", "2025-11-04 12:00:00", cost=12.34, tokens=1500),
+            workflow("b", "2026-06-01 12:00:00", cost=2345.67, tokens=1_500_000),
+            workflow("c", "2026-06-02 12:00:00", cost=0.4, tokens=90),
+        ]
+    )
+    r = app.renderer
+    years = [r.year_row_text(y, ">") for y in app.years]
+    months = [r.month_row_text(m, ">") for m in app.months]
+    days = [r.day_row_text(d, ">") for d in app.panel_days]
+
+    # The three stacked panels line up cell for cell, so their bars share one lane.
+    assert len({len(t) for t in years + months + days}) == 1
+    assert len({t.index("ses") for t in years + months + days}) == 1
+
+    # Cents are dropped, but sub-dollar spend still reads as spend.
+    assert "$2,346" in months[0] and "$2,345.67" not in months[0]
+    assert "<$1" in [d for d in days if d.startswith("> 2026-06-02")][0]
+
+    # No column is wider than its widest value, so the panel is sized to its content.
+    assert r.period_columns() == (len("$2,358"), len("1.5M"), len("3"))
+    # Narrower than the old layout, and never so narrow that bar_lane drops the bars.
+    width = r.browse_left_width(160)
+    assert width < 51
+    assert r.bar_lane(width) == (ot.formatting.BAR_CELLS, r.period_row_width())
 
 
 def test_pager_lines_dispatch_session_tabs_by_name():

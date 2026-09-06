@@ -28,13 +28,15 @@ def focus_calendar(app):
 
 
 def test_bar_lane_keeps_the_bar_out_of_the_text_region():
-    cells, text_w = ot.Renderer.bar_lane(57)
+    r = app_with([workflow("a", "2026-06-03 12:00:00", cost=5)]).renderer
+    row = r.period_row_width()
+    cells, text_w = r.bar_lane(row + 12)
     assert cells == ot.BAR_CELLS
-    assert text_w == 57 - 2 - (ot.BAR_CELLS + 2)
-    # A narrow panel drops the bar and uses the full inner width for text.
-    cells, text_w = ot.Renderer.bar_lane(40)
+    assert text_w == row  # the widest row fits exactly, bars beside it
+    # One column tighter and the bar goes rather than clip the row.
+    cells, text_w = r.bar_lane(row + 11)
     assert cells == 0
-    assert text_w == 38
+    assert text_w == row + 9
 
 
 def test_trends_survive_an_undated_workflow():

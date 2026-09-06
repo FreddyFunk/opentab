@@ -23,6 +23,13 @@ def money(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def money_whole(value: float) -> str:
+    # Browse columns trade cents for width; sub-dollar spend must not read as zero.
+    if 0 < value < 0.5:
+        return "<$1"
+    return f"${value:,.0f}"
+
+
 def money_label(value: float) -> str:
     if value <= 0:
         return ""
