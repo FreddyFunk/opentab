@@ -18,7 +18,7 @@ from opentab.models import (
     YearSummary,
 )
 from opentab.themes import hex_rgb1000, ink_on, nearest_8, nearest_256, ramp
-from opentab.tui import keymap
+from opentab.tui import bindings, keymap
 
 if TYPE_CHECKING:
     from opentab.tui.app import App
@@ -5042,7 +5042,9 @@ class Renderer:
         # runs down the keys and stops at the one it wants -- anything that needs a
         # paragraph belongs in docs/keys.md, not here.
         sections = self.help_sections()
-        key_w = max((len(e.label(self.app)) for _t, rows in sections for e in rows), default=9)
+        key_w = max(
+            (display_width(e.label(self.app)) for _t, rows in sections for e in rows), default=9
+        )
         desc_x = key_w + 2
 
         head = curses.color_pair(6) | curses.A_BOLD
@@ -5053,19 +5055,20 @@ class Renderer:
         for title, rows in sections:
             # Centered section title with a rule filling both sides.
             label = f" {title} "
-            left = max(1, (inner_w - len(label)) // 2)
+            label_w = display_width(label)
+            left = max(1, (inner_w - label_w) // 2)
             lines.append(
                 [
                     (0, "─" * left, rule),
                     (left, label, head),
-                    (left + len(label), "─" * max(0, inner_w - left - len(label)), rule),
+                    (left + label_w, "─" * max(0, inner_w - left - label_w), rule),
                 ]
             )
             for entry in rows:
                 keys = entry.label(self.app)
                 lines.append(
                     [
-                        (key_w - len(keys), keys, key_attr),
+                        (key_w - display_width(keys), keys, key_attr),
                         (desc_x, shorten(entry.text(self.app), max(8, inner_w - desc_x)), 0),
                     ]
                 )
@@ -5078,9 +5081,13 @@ class Renderer:
         # Sized to the longest line it has to print -- the panel is as big as the keys
         # need and no bigger.
         sections = self.help_sections()
-        key_w = max((len(e.label(self.app)) for _t, rows in sections for e in rows), default=9)
-        desc = max((len(e.text(self.app)) for _t, rows in sections for e in rows), default=20)
-        titles = max((len(t) + 4 for t, _rows in sections), default=12)
+        key_w = max(
+            (display_width(e.label(self.app)) for _t, rows in sections for e in rows), default=9
+        )
+        desc = max(
+            (display_width(e.text(self.app)) for _t, rows in sections for e in rows), default=20
+        )
+        titles = max((display_width(t) + 4 for t, _rows in sections), default=12)
         return max(key_w + 2 + desc, titles, 52)
 
     def draw_help(self, stdscr: curses.window, y: int, bottom: int, width: int) -> None:
@@ -5918,15 +5925,26 @@ class Renderer:
             f"{self._key('menu.whatif.filter', 'cancel')} drops the filter"
             if self.whatif_filter_active
             else f"{self._key('menu.whatif', 'filter')} filter · "
-            f"{self._key('main', 'whatif')} again clears it · "
+            f"{self._key('menu.whatif', 'advance')} next · "
             f"{self._key('menu.whatif', 'cancel')} cancels"
         )
         lines += [("", 0), (hint, curses.color_pair(1))]
-        catalog = "/".join(self.app.keymap.labels("menu.whatif", "catalog")[:3])
+        catalog_specs = self.app.keymap.specs("menu.whatif", "catalog")
+        if self.whatif_filter_active:
+            catalog_specs = tuple(
+                spec
+                for spec in catalog_specs
+                if any(
+                    bindings.typed_char(code) is None
+                    and self.app.keymap.action("menu.whatif.filter", code) is None
+                    for code in bindings.parse_key(spec)
+                )
+            )
+        catalog = "/".join(bindings.pretty_key(spec) for spec in catalog_specs[:3])
+        ctx = "menu.whatif.filter" if self.whatif_filter_active else "menu.whatif"
         title = (
-            f"What-if model · {self._keys('menu.whatif', 'down', 'up')} · {catalog} · "
-            f"{self._key('menu.whatif', 'filter')} · {self._key('menu.whatif', 'select')} · "
-            f"{self._key('menu.whatif', 'cancel')}"
+            f"What-if model · {self._keys(ctx, 'down', 'up')} · {catalog} · "
+            f"{self._key(ctx, 'select')} · {self._key(ctx, 'cancel')}"
         )
         my, mx, mh, mw = self.draw_modal(stdscr, scr_h, scr_w, title, lines)
         # The tier switch is a real tab strip (the P overlay's view tabs, same renderer,
@@ -6052,6 +6070,8 @@ class Renderer:
             # pulled session it copies the ssh line, not a cd into a path that isn't here.
             if kind == "copy" and remote:
                 label = "copy ssh command"
+            if self.app.keymap.action("menu.launch", ord(kc)) is not None:
+                kc = " "  # A configured menu action takes precedence over target letters.
             lines.append((f" {kc}  {label}", attr))
         lines += [("", 0), (f" {self._key('menu.launch', 'cancel')}  cancel", curses.A_NORMAL)]
         self.draw_modal(

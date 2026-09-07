@@ -145,8 +145,10 @@ worked 2h 15m (until 14:15)`. The Context tab still has the richer wall-clock st
 | `D` | Demo (anonymize for a shareable screen) — opens a multi-check picker of what to scramble: **Titles** (session / prompt / model / machine names), **Paths** (project directories), **Turns** (the expandable full prompt text), **Spend** (dollars + token magnitudes). Paths are separate from titles because a project tree is often the one label a demo *wants* real — leave it unchecked to keep real project names on an otherwise anonymised screen. `j`/`k` move · `Space` toggle a category · `a` all/none · `Enter` apply · `Esc` cancel. **While demo is on, `D` switches it straight back off** (one press, no picker); the categories are remembered, so `D` again re-offers them. From the CLI: `--demo` (all) or `--demo titles,spend` |
 | `r` / `q` / `?` | Reload the data · quit · help (Help also links to What's New) |
 
-The global toggles stay live *inside* the overlays: `?`, `C`, `H`, `M` (fleet), and `D`
-work from anywhere, Trends and Prices included.
+The global toggles stay live inside Trends and Prices: `?`, `C`, `H`, `M` (fleet),
+and `D`. Help also accepts the theme, harness, machine and demo pickers. Other
+modals own their input and show their controls in their title or footer. The Help
+body describes the view underneath it; close Help before using that view's keys.
 
 ## What persists between runs
 
@@ -172,8 +174,9 @@ them split).
 
 ## Remap any key
 
-Every key above — and every key in every picker, overlay, pager, prompt and text
-field — is remappable. The keymap lives at `~/.config/opentab/keymap.conf`, a fully
+Bindings in every view, picker, overlay, pager, prompt and text field are
+remappable. Launch target letters are fixed shortcuts, hidden when a configured
+menu binding takes their key. The keymap lives at `~/.config/opentab/keymap.conf`, a fully
 commented INI file installed on first run (also in the wheel as
 `opentab/data/keymap.conf`; `opentab --keymap` prints the path). Press **`K`** inside
 opentab to open it in `$EDITOR` (`$VISUAL` wins, `vi` as fallback): edit, save, quit,

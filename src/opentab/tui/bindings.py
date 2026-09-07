@@ -222,6 +222,7 @@ REGISTRY: tuple[Context, ...] = (
             Action("theme", ("C",), "the colour picker floats above help"),
             Action("harness", ("H",), "the harness picker floats above help"),
             Action("machine", ("M",), "the machine filter floats above help"),
+            Action("demo", ("D",), "the demo picker floats above help"),
             Action("edit_keymap", ("K",), "edit these bindings in $EDITOR"),
             Action("whats_new", ("W",), "what's new in this release"),
             Action("close", ("esc", "q", "?"), "close the cheat sheet"),

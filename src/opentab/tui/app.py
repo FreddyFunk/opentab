@@ -3771,11 +3771,13 @@ class App:
         self.notify(f"exported {len(rows)} rows → {short_path(path, 999)}", "success")
 
     def _current_directory(self) -> str | None:
+        session = self.bookmark_target()
+        if session is not None:
+            return session.directory if session.directory != "(unknown)" else None
         if self.browse_mode == "projects":
             project = self.selected_project_summary
-            return project.directory if project else None
-        session = self.current_session()
-        return session.directory if session else None
+            return project.directory if project and project.directory != "(unknown)" else None
+        return None
 
     def open_current(self) -> None:
         if self.store.demo:
@@ -6354,6 +6356,8 @@ class App:
                 # this table exists to prevent.
             elif act == "machine" and self.machines_present:
                 self.open_machine_menu()  # the machine filter floats above help too
+            elif act == "demo":
+                self.demo_action()
             elif act == "edit_keymap":
                 self.edit_keymap(stdscr)  # change the very keys the list is showing
             elif act == "whats_new":
@@ -6472,7 +6476,7 @@ class App:
             elif act == "back":
                 self.trends = False  # back (with nothing focused) closes the overlay
             else:
-                handled = self._trend_common_key(key)
+                handled = self._trend_common_key(key, "trends.chart" if focused else "trends")
                 if handled is not None:
                     return handled
                 # Any other key is swallowed: Trends is interactive, so a mistyped
@@ -6526,7 +6530,7 @@ class App:
             # In browse, + drills in like Enter (its old alias); once the detail is
             # the active pane it becomes lazygit's screen-mode key: toggle between
             # the split and a full-screen detail.
-            if self.view == "zoom":
+            if self.view in ("zoom", "session"):
                 self.toggle_zoom_maximized()
             else:
                 self.drill_in()

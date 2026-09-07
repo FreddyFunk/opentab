@@ -108,6 +108,23 @@ def in_session(app: App) -> bool:
     return in_main(app) and app.view == "session"
 
 
+def binding_context(app: App) -> str:
+    """Context described by Help, excluding the Help pager itself."""
+    if in_prices(app):
+        return "prices.sessions" if in_price_drill(app) else "prices"
+    if in_trends(app):
+        if app.trend_drill is not None:
+            return "trends.drill"
+        if app.trend_focus and trend_tab(app) in ("Daily", "Weekly", "Monthly", "Calendar"):
+            return "trends.chart"
+        return "trends"
+    return "main"
+
+
+def _picker_context(app: App) -> str:
+    return "help" if app.help else binding_context(app)
+
+
 def _sort_ctx(app: App) -> str:
     return "prices" if in_prices(app) else "main"
 
@@ -140,7 +157,7 @@ def _ranked_trend(app: App) -> bool:
 
 
 def _trend_pager_alias(app: App) -> str:
-    return _keys_text(app, "trends", ("older", "newer"), between=" ", within=" ")
+    return _keys_text(app, binding_context(app), ("older", "newer"), between=" ", within=" ")
 
 
 def _trend_jk(app: App) -> str:
@@ -179,8 +196,8 @@ def _trend_enter(app: App) -> str:
 
 def _trend_close_summary(app: App) -> str:
     if app.trend_focus or app.trend_drill is not None:
-        back = app.keymap.label("trends", "back")
-        close = _keys_text(app, "trends", ("close*",), between="", within=" / ")
+        back = app.keymap.label(binding_context(app), "back")
+        close = _keys_text(app, binding_context(app), ("close*",), between="", within=" / ")
         return f"leave the focused chart / the drill ({back}), or close ({close})"
     return "close"
 
@@ -214,7 +231,7 @@ def _enter_opens_something(app: App) -> bool:
 
 def _enter_summary(app: App) -> str:
     if app.view == "browse":
-        what = "project" if app.browse_mode == "projects" else app.focus.rstrip("s")
+        what = app.browse_mode.rstrip("s") if app.flat_browse_mode else app.focus.rstrip("s")
         return f"drill into the selected {what}"
     tab = app.active_tab_name()
     if tab == "Sessions":
@@ -239,7 +256,7 @@ def _aliases_summary(app: App, ctx: str, actions: tuple[str, ...], base: str) ->
 
 def _panel_keys_label(app: App) -> str:
     digits = _keys_text(app, "main", ("panel_1",), between=" ", within=" ")
-    if app.browse_mode != "projects":
+    if not app.flat_browse_mode:
         digits = _keys_text(app, "main", ("panel_1", "panel_2", "panel_3"), between=" ", within=" ")
     detail = app.keymap.label("main", "panel_detail")
     return f"{digits}  {detail}" if detail else digits
@@ -248,8 +265,8 @@ def _panel_keys_label(app: App) -> str:
 def _panel_summary(app: App) -> str:
     p1 = app.keymap.label("main", "panel_1")
     p0 = app.keymap.label("main", "panel_detail")
-    if app.browse_mode == "projects":
-        return f"{p1} the Projects list · {p0} the detail pane"
+    if app.flat_browse_mode:
+        return f"{p1} the {app.browse_mode_spec.label} list · {p0} the detail pane"
     return "jump to a panel — its number is in its title"
 
 
@@ -326,10 +343,14 @@ KEYS: tuple[Key, ...] = (
         id="max",
         ctx="main",
         actions=("maximize",),
-        summary="maximize / restore the detail pane",
+        summary=lambda app: "focus the detail pane"
+        if app.view == "browse"
+        else "change the zoom layout on return"
+        if app.view == "session"
+        else "maximize / restore the detail pane",
         section="here",
-        when=in_zoom,
-        chip="max",
+        when=in_main,
+        chip=lambda app: "detail" if app.view == "browse" else "max",
         active=lambda app: app.zoom_maximized,
     ),
     Key(
@@ -396,7 +417,7 @@ KEYS: tuple[Key, ...] = (
         ctx=_sort_ctx,
         actions=("filter*",),
         summary=lambda app: "filter the model list"
-        if in_price_list(app)
+        if in_price_list(app) or (in_zoom(app) and app.active_tab_name() == "Models")
         else "filter — fuzzy over titles, projects, notes",
         section="here",
         when=lambda app: in_price_list(app) or (in_main(app) and app.can_filter_current_view()),
@@ -417,7 +438,7 @@ KEYS: tuple[Key, ...] = (
         actions=("launch",),
         summary="resume this session in its own tool",
         section="here",
-        when=lambda app: in_main(app) and app.can_launch_current(),
+        when=lambda app: in_main(app) and not app.store.demo and app.can_launch_current(),
         chip="launch",
         active=lambda app: app.launch_menu is not None,
     ),
@@ -427,7 +448,7 @@ KEYS: tuple[Key, ...] = (
         actions=("open_dir",),
         summary="open its directory",
         section="here",
-        when=in_main,
+        when=lambda app: in_main(app) and not app.store.demo and bool(app._current_directory()),
     ),
     Key(
         id="export",
@@ -437,11 +458,11 @@ KEYS: tuple[Key, ...] = (
         if in_prices(app)
         else "export this list to CSV",
         section="here",
-        when=lambda app: in_main(app) or in_price_list(app),
+        when=lambda app: not app.store.demo and (in_main(app) or in_price_list(app)),
     ),
     Key(
         id="trends-tabs",
-        ctx="trends",
+        ctx=binding_context,
         actions=("tab_prev", "tab_next"),
         summary="switch tab",
         section="here",
@@ -450,7 +471,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="trends-enter",
-        ctx="trends",
+        ctx=binding_context,
         actions=("select",),
         summary=_trend_enter,
         section="here",
@@ -461,7 +482,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="trends-page",
-        ctx="trends",
+        ctx=binding_context,
         actions=("down", "up"),
         summary=_trend_jk,
         section="here",
@@ -471,7 +492,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="trends-sort",
-        ctx="trends",
+        ctx=binding_context,
         actions=("sort",),
         summary="order the ranking — cost, name, tokens, count",
         section="here",
@@ -481,11 +502,13 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="trends-shades",
-        ctx="trends",
+        ctx=binding_context,
         actions=("shades_more", "shades_less"),
         summary="more / fewer heat shades",
         section="here",
-        when=lambda app: in_trends(app) and trend_tab(app) == "Calendar",
+        when=lambda app: in_trends(app)
+        and app.trend_drill is None
+        and trend_tab(app) == "Calendar",
         chip="shades",
     ),
     Key(
@@ -497,14 +520,14 @@ KEYS: tuple[Key, ...] = (
         actions=("cursor_left", "cursor_up", "cursor_down", "cursor_right"),
         summary="walk the bar / day cursor",
         section="here",
-        when=lambda app: in_trends(app) and app.trend_focus,
+        when=lambda app: binding_context(app) == "trends.chart",
         segments=lambda app: (
             [(f"{_chart_arrows(app)} move", False)] if _chart_arrows(app) else []
         ),
     ),
     Key(
         id="trends-close",
-        ctx="trends",
+        ctx=binding_context,
         actions=("back", "close*"),
         summary=_trend_close_summary,
         section="here",
@@ -634,11 +657,11 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="move",
-        ctx="main",
+        ctx=binding_context,
         actions=("down", "up"),
         summary=lambda app: _aliases_summary(
             app,
-            "main",
+            binding_context(app),
             ("down", "up"),
             "scroll this turn"
             if _on_trace(app)
@@ -653,15 +676,17 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="page",
-        ctx="main",
+        ctx=binding_context,
         actions=("page_down", "page_up"),
-        summary=lambda app: _aliases_summary(app, "main", ("page_down", "page_up"), "half a page"),
+        summary=lambda app: _aliases_summary(
+            app, binding_context(app), ("page_down", "page_up"), "half a page"
+        ),
         section="nav",
         when=lambda app: not in_trends(app) or app.trend_drill is not None,
     ),
     Key(
         id="ends",
-        ctx="main",
+        ctx=binding_context,
         actions=("top", "bottom"),
         summary=lambda app: "first / last prompt"
         if _on_turns(app) and app.active_turn_drill is None
@@ -678,7 +703,7 @@ KEYS: tuple[Key, ...] = (
     # Global modal pickers float above overlays; context-specific pickers remain in Here.
     Key(
         id="source",
-        ctx="main",
+        ctx=_picker_context,
         actions=("harness",),
         summary=lambda app: "filter harness (fleet)" if app.machines_present else "switch harness",
         section="pickers",
@@ -689,7 +714,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="machine-filter",
-        ctx="main",
+        ctx=_picker_context,
         actions=("machine",),
         summary="filter every view to one machine",
         section="pickers",
@@ -710,7 +735,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="theme",
-        ctx="main",
+        ctx=_picker_context,
         actions=("theme",),
         summary="colour theme",
         section="pickers",
@@ -718,7 +743,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="demo",
-        ctx="main",
+        ctx=_picker_context,
         actions=("demo",),
         summary=lambda app: (
             "back to real data"
@@ -726,9 +751,19 @@ KEYS: tuple[Key, ...] = (
             else "anonymize for a screenshot — pick titles / turns / spend"
         ),
         section="pickers",
-        when=lambda app: bool(app.source_key),
+        when=lambda app: bool(app.source_key) and (in_main(app) or app.help),
         chip=lambda app: "demo·on" if app.store.demo else "demo",
         active=lambda app: app.demo_menu or bool(getattr(app.store, "demo", False)),
+    ),
+    Key(
+        id="demo-toggle",
+        ctx=binding_context,
+        actions=("demo_toggle",),
+        summary="back to real data / anonymize with the selected demo categories",
+        section="pickers",
+        when=lambda app: bool(app.source_key) and not in_main(app) and not app.help,
+        chip=lambda app: "demo·on" if app.store.demo else "demo",
+        active=lambda app: bool(app.store.demo),
     ),
     Key(
         id="range",
@@ -750,25 +785,27 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="trends",
-        ctx="main",
+        ctx=binding_context,
         actions=("trends",),
         summary="trends — charts, calendar heatmap, rankings",
         section="global",
+        when=lambda app: not in_trends(app),
         chip="trends",
         active=lambda app: app.trends,
     ),
     Key(
         id="prices",
-        ctx="main",
+        ctx=binding_context,
         actions=("prices",),
         summary="model prices — cheapest for your token mix",
         section="global",
+        when=lambda app: not in_prices(app),
         chip="prices",
         active=lambda app: app.show_prices,
     ),
     Key(
         id="dollar",
-        ctx="main",
+        ctx=binding_context,
         actions=("api_prices",),
         summary="price subscription usage at API list rates",
         section="global",
@@ -782,7 +819,7 @@ KEYS: tuple[Key, ...] = (
         actions=("refresh_machines",),
         summary="re-pull machine summaries over ssh",
         section="global",
-        when=lambda app: in_main(app) and app.machines_present,
+        when=lambda app: in_main(app) and app.can_refresh_machines(),
         chip="refresh",
     ),
     Key(
@@ -804,7 +841,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="keymap",
-        ctx="main",
+        ctx=_picker_context,
         actions=("edit_keymap",),
         summary="remap any of these — keymap.conf in $EDITOR, live reload",
         section="global",
@@ -821,7 +858,7 @@ KEYS: tuple[Key, ...] = (
     ),
     Key(
         id="help",
-        ctx="main",
+        ctx=binding_context,
         actions=("help",),
         summary="these keys",
         section="global",
@@ -880,6 +917,7 @@ FOOTER_ORDER = (
     "prices",
     "launch",
     "demo",
+    "demo-toggle",
     "dollar",
     "whatif",
     "whats-new",

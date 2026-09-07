@@ -539,3 +539,130 @@ def test_the_keybar_is_centred_and_never_crowds_the_version():
         assert abs(left - right) <= 1 and left > 0
     finally:
         ot.curses.color_pair, ot.curses.init_pair = orig_cp, orig_ip
+
+
+def test_help_uses_the_dispatch_context_in_every_overlay_subview():
+    from opentab.tui.bindings import Keymap
+
+    for ctx in ("main", "trends", "trends.chart", "trends.drill", "prices", "prices.sessions"):
+        app = _keymap_app()
+        app.source_key = "opencode"
+        app.loaded[0].machine = "local"
+        remote = workflow("remote", "2026-06-01 13:00:00")
+        remote.machine = "remote"
+        app.loaded.append(remote)
+        app.can_harness_filter = lambda: True
+        if ctx.startswith("trends"):
+            app.trends = True
+            app.trend_focus = ctx == "trends.chart"
+            if ctx == "trends.drill":
+                app.trend_drill = ("provider", "anthropic")
+        elif ctx.startswith("prices"):
+            app.show_prices = True
+            if ctx == "prices.sessions":
+                app.prices_model = "opus"
+        assert ot.keymap.binding_context(app) == ctx
+        ids = ["source", "machine-filter", "theme", "dollar", "help"]
+        ids += ["demo" if ctx == "main" else "demo-toggle"]
+        ids += ["prices"] if ctx.startswith("trends") else ["trends"]
+        ids += (
+            ["trends-tabs", "trends-enter", "trends-page", "trends-close"]
+            if ctx.startswith("trends")
+            else ["move", "page", "ends"]
+        )
+        for key_id in ids:
+            entry = ot.keymap.BY_ID[key_id]
+            action = entry.actions[0].rstrip("*")
+            app.keymap = Keymap({(ctx, action): ["v"]})
+            assert entry.shown(app), (ctx, key_id)
+            assert entry.label(app).split()[0] == "v", (ctx, key_id, entry.label(app))
+            app.help = True
+            expected = "help" if key_id in ("source", "machine-filter", "theme", "demo") else ctx
+            assert entry.context(app) == expected
+            app.help = False
+
+
+def test_focused_chart_dispatches_remapped_global_actions_from_its_context():
+    app = _keymap_app()
+    app.trends = app.trend_focus = True
+    app.keymap = ot.tui.bindings.Keymap({("trends.chart", "help"): ["v"]})
+    app.handle_key(None, ord("?"))
+    assert not app.help
+    app.handle_key(None, ord("v"))
+    assert app.help
+
+
+def test_help_picker_remaps_and_demo_dispatch():
+    app = _keymap_app()
+    app.help = True
+    app.source_key = "opencode"
+    calls = []
+    app.demo_action = lambda: calls.append("demo")
+    for key_id, action in (
+        ("theme", "theme"),
+        ("source", "harness"),
+        ("machine-filter", "machine"),
+        ("keymap", "edit_keymap"),
+        ("demo", "demo"),
+    ):
+        app.keymap = ot.tui.bindings.Keymap({("help", action): ["v"]})
+        assert ot.keymap.BY_ID[key_id].label(app) == "v"
+    app.handle_key(None, ord("v"))
+    assert calls == ["demo"] and app.help
+
+
+def test_help_gates_demo_actions_and_names_flat_panels():
+    app = _keymap_app()
+    for mode in app.BROWSE_MODES:
+        app.set_browse_mode(mode.key)
+        entry = ot.keymap.BY_ID["panels"]
+        assert ("2" in entry.label(app)) == mode.hierarchical
+        if not mode.hierarchical:
+            assert mode.label in entry.text(app)
+            assert mode.key.rstrip("s") in ot.keymap.BY_ID["enter"].text(app)
+    app.store.demo = True
+    for key_id in ("launch", "export", "open", "refresh-machines", "dollar", "note"):
+        assert not ot.keymap.BY_ID[key_id].shown(app), key_id
+
+
+def test_directory_help_requires_a_visible_target_and_plus_works_in_sessions():
+    app = _keymap_app([workflow("a", "2026-06-01 12:00:00", directory="/x")])
+    assert not ot.keymap.BY_ID["open"].shown(app)
+    app.view = "session"
+    assert ot.keymap.BY_ID["open"].shown(app)
+    assert ot.keymap.BY_ID["max"].shown(app)
+    before = app.zoom_maximized
+    app.handle_key(None, ord("+"))
+    assert app.zoom_maximized != before and app.view == "session"
+
+
+def test_help_aligns_wide_character_bindings_by_terminal_cells():
+    app = _keymap_app()
+    app.keymap = ot.tui.bindings.Keymap({("main", "select"): ["界"]})
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: 0
+        lines = app.renderer.help_lines(100)
+    finally:
+        ot.curses.color_pair = original
+    row = next(row for row in lines if len(row) == 2 and row[0][1] == "界")
+    assert row[1][0] - (row[0][0] + ot.display_width(row[0][1])) == 2
+
+
+def test_launch_hint_hides_a_target_shortcut_stolen_by_a_menu_remap():
+    app = _keymap_app()
+    app.launch_menu = app.loaded[0]
+    app.launch_targets = lambda: [("w", "window", "new window"), ("y", "copy", "copy command")]
+    app.keymap = ot.tui.bindings.Keymap({("menu.launch", "down"): ["w"]})
+    captured = []
+    app.renderer.draw_modal = lambda *args: captured.extend(args[-1])
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: 0
+        app.renderer.draw_launch_menu(FakeScreen(24, 80), 24, 80)
+    finally:
+        ot.curses.color_pair = original
+    assert any(text == "    new window" for text, _ in captured)
+    assert any(text == " y  copy command" for text, _ in captured)
+    app.handle_launch_key(ord("w"))
+    assert app.launch_menu_index == 1 and app.launch_menu is not None

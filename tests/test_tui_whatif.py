@@ -564,6 +564,9 @@ def test_whatif_picker_renders_the_tier_tab_strip():
             app.renderer.draw_whatif_menu(screen, 30, 90)
             text = screen_text(screen)
             assert "[your models]" in text and " models.dev " in text
+            assert "w next" in text and "again clears" not in text
+            app.handle_whatif_menu_key(ord("w"))
+            assert app.whatif_menu_index == 1 and app.whatif_menu
             tabs = [r for r in app.renderer.regions if r[0] == "whatiftab"]
             assert [t[-1] for t in tabs] == [0, 1]
 
@@ -571,6 +574,12 @@ def test_whatif_picker_renders_the_tier_tab_strip():
             screen2 = FakeScreen(30, 90)
             app.renderer.draw_whatif_menu(screen2, 30, 90)
             assert "[models.dev]" in screen_text(screen2)
+            app.whatif_filter_active = True
+            screen3 = FakeScreen(30, 90)
+            app.renderer.draw_whatif_menu(screen3, 30, 90)
+            text = screen_text(screen3)
+            assert "Tab/←/→" in text and "Tab/h/l" not in text
+            assert "j/k" not in text
         finally:
             ot.curses.color_pair = orig_cp
 
