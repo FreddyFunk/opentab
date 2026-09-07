@@ -4966,6 +4966,11 @@ class App:
             self.view = "zoom"
             tabs = self.current_tabs()  # land back on the Sessions tab we came from
             self.tab = tabs.index("Sessions") if "Sessions" in tabs else 0
+            if self._trend_return is not None and self._trend_return[0] == "drill":
+                # Ranked Trends drills opened the session, not its intermediate day scope.
+                self.view = "browse"
+                self._clear_zoom_drills()
+                self._reopen_trends(self._trend_return)
         elif self.view == "zoom":
             if self.zoom_model:
                 # Popped FIRST: a model drill is a membership filter layered on top of

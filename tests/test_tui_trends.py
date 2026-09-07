@@ -647,8 +647,7 @@ def test_trend_models_rows_drill_into_sessions_and_a_session():
     app.handle_key(None, 10)  # Enter again -> straight into that session
     assert not app.trends and app.view == "session"
     assert app.current_session().id == "b"
-    app.handle_key(None, 27)  # Esc -> back out to the day zoom
-    app.handle_key(None, 27)  # Esc -> back to the Trends drill list
+    app.handle_key(None, 27)  # One Esc returns directly to the Trends drill list.
     assert app.trends and app.trend_drill == ("model", "openai/gpt-5")
     assert app.trend_drill_tab == 1
     assert app.trend_tabs[app.trend_tab] == "Models"
@@ -808,8 +807,7 @@ def test_trend_drill_list_h_l_switch_tabs_instead_of_closing():
     app.handle_key(None, 10)  # the model's economics
     app.handle_key(None, 10)  # its sessions
     app.handle_key(None, 10)  # into a session
-    app.handle_key(None, 27)  # Esc -> day zoom
-    app.handle_key(None, 27)  # Esc -> back to the drill list
+    app.handle_key(None, 27)  # Esc -> directly back to the drill list
     assert app.trends and app.trend_drill == ("model", "openai/gpt-5")
     app.handle_key(None, ord("l"))  # back to Economics within the same model
     assert app.trends and app.trend_economics
@@ -826,6 +824,45 @@ def test_trend_drill_list_h_l_switch_tabs_instead_of_closing():
     assert app.trend_drill[0] == "provider"
     app.handle_key(None, ord("h"))
     assert app.trend_drill is None and app.trend_tabs[app.trend_tab] == "Models"
+
+
+def test_ranked_trends_session_returns_directly_to_its_list_with_cursor_kept():
+    for tab in ("Models", "Providers", "Projects", "Harnesses", "Machines"):
+        app = _ranked_app()
+        app.loaded[0].machine = "first"
+        app.loaded[1].machine = "second"
+        _open_trend_tab(app, tab)
+        app.trend_row_index = len(app.trend_ranked_keys()) - 1
+        app._open_trend_drill()
+        app.trend_drill_tab = 1
+        app.trend_drill_index = len(app.trend_drill_sessions()) - 1
+        origin = (app.trend_drill, app.trend_row_index, app.trend_drill_index)
+        app.handle_key(None, 10)
+        assert app.view == "session" and not app.trends
+        assert ot.keymap.BY_ID["esc"].text(app) == "back to the Trends session list"
+        app.handle_key(None, 27)
+        assert app.trends and app.trend_tabs[app.trend_tab] == tab
+        assert (app.trend_drill, app.trend_row_index, app.trend_drill_index) == origin
+        assert app.trend_drill_tab == 1 and app._trend_return is None
+        app.handle_key(None, 27)
+        assert app.trends and app.trend_drill is None  # Next Esc leaves only the list.
+
+
+def test_calendar_session_still_returns_to_the_day_the_user_opened():
+    app = _ranked_app()
+    _open_trend_tab(app, "Calendar")
+    app.handle_key(None, 10)  # Focus Calendar.
+    app.cal_cursor = "2026-06-01"
+    app.handle_key(None, 10)  # Open its day scope explicitly.
+    assert not app.trends and app.view == "zoom"
+    app.tab = app.current_tabs().index("Sessions")
+    app.handle_key(None, 10)
+    assert app.view == "session"
+    app.handle_key(None, 27)
+    assert app.view == "zoom" and not app.trends
+    assert app.active_tab_name() == "Sessions"
+    app.handle_key(None, 27)
+    assert app.trends and app.trend_tabs[app.trend_tab] == "Calendar"
 
 
 def test_trends_model_economics_reuses_model_and_range_scoped_card():

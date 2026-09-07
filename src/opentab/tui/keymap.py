@@ -669,6 +669,8 @@ KEYS: tuple[Key, ...] = (
         if _on_trace(app)
         else "back to the prompts"
         if _on_turns(app) and app.active_turn_drill is not None
+        else "back to the Trends session list"
+        if in_session(app) and app._trend_return is not None and app._trend_return[0] == "drill"
         else "step back out — session → zoom → browse",
         section="nav",
         when=lambda app: in_main(app) and app.view != "browse",

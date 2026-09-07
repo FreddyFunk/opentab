@@ -120,8 +120,11 @@ click-to-sort keys, keeping a renamed column clickable.
 The Trends Models drill reuses the same Economics card over its active-range
 sessions, rather than the sidebar scope. `trend_drill_tab` selects Economics or
 Sessions; `trend_drill_scroll` pages the card without moving the session cursor.
-Returning from a session restores Sessions. Other ranked drills remain direct
-session lists, and the Trends session table retains its current-price-mode costs.
+One back action from a session restores the Trends Sessions tab directly; the day
+scope used internally to select the session is not a navigation step. Other ranked
+drills likewise return directly to their session lists. Calendar/chart drills still
+return through the date scope the user explicitly opened. The Trends session table
+retains its current-price-mode costs.
 
 The attributed dollars are always **list-rate calculations** from per-model token
 rows, including the one-hour cache-write subset. They are not a decomposition of
