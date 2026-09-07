@@ -6254,6 +6254,7 @@ class Renderer:
                 attr = curses.A_NORMAL
             x = max(0, graph_center - len(line) // 2) if is_title else graph_off
             self.write_rich(stdscr, y + 3 + i, 2 + x, shorten(line, inner_w - x), attr)
+            self._paint_token_runs(stdscr, y + 3 + i, 2 + x, line, inner_w - x)
         # Hand the mouse handler this frame's geometry: the bar slots (shifted by
         # the centering offset) and the selectable rows' screen band.
         if self._bar_slots and current in ("Daily", "Weekly", "Monthly"):

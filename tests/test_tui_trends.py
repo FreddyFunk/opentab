@@ -897,6 +897,52 @@ def test_trends_model_economics_reuses_model_and_range_scoped_card():
         ot.curses.color_pair = orig_cp
 
 
+def test_trends_model_economics_paints_token_colors_in_bars_and_legend():
+    from opentab.heatmap import TOKEN_SERIES_BASE_PAIR
+
+    model = "anthropic/claude-opus-4.5"
+    app = app_with([workflow("a", "2026-06-01 12:00:00", directory="/x")])
+    app._model_by_root = {
+        "a": [
+            dict(
+                _model_row(model, 5.0, 1500000),
+                input=100000,
+                output=200000,
+                reasoning=300000,
+                cache_read=400000,
+                cache_write=500000,
+            )
+        ]
+    }
+    app.trends = True
+    app.trend_tab = app.trend_tabs.index("Models")
+    app._open_trend_drill()
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: n << 8
+        for height, width, scroll in ((48, 120, 0), (18, 78, 10)):
+            app.trend_drill_scroll = scroll
+            screen = AttrScreen(height, width)
+            app.renderer.draw_trends(screen, 0, height, width)
+            painted = []
+            for y in range(3, height - 1):
+                line = "".join(screen.cells.get((y, x), " ") for x in range(width))
+                for text, runs in app.renderer._token_runs.items():
+                    if not text or text not in line:
+                        continue
+                    start = line.index(text)
+                    for col, length, slot in runs:
+                        expected = ((TOKEN_SERIES_BASE_PAIR + slot) << 8) | ot.curses.A_BOLD
+                        assert all(
+                            screen.attrs[(y, start + col + i)] == expected for i in range(length)
+                        ), (height, text, slot)
+                    painted.append({slot for _col, _length, slot in runs})
+            assert len(painted) >= 3  # Both bars and the legend reach the actual painter.
+            assert all(slots == set(range(5)) for slots in painted)
+    finally:
+        ot.curses.color_pair = original
+
+
 def test_trends_overlay_toggles_and_switches_tabs():
     app = app_with([workflow("a", "2026-06-01 12:00:00")])
     assert not app.trends
