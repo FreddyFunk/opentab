@@ -26,6 +26,14 @@ def test_export_dataset_follows_the_visible_view():
     assert scope == "projects"
     assert {r[0] for r in rows} == {"/tmp/a", "/tmp/b"}
 
+    app.loaded[0].source = "OpenCode"
+    app.loaded[1].source = "Claude Code"
+    app.set_browse_mode("harnesses")
+    scope, header, rows = app._export_dataset()
+    assert scope == "harnesses" and header[-1] == "aggregate"
+    assert rows[0][0] == ot.ALL_HARNESSES and rows[0][-1] is True
+    assert {row[0] for row in rows[1:]} == {"OpenCode", "Claude Code"}
+
     app.set_browse_mode("time")
     app.view = "zoom"
     app.focus = "months"

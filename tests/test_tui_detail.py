@@ -1907,6 +1907,63 @@ def test_turns_cursor_hands_the_key_back_at_either_end_so_the_pane_scrolls():
     assert app.scroll == 1  # the pane took the key the cursor could not use
 
 
+def test_harness_overview_distinguishes_the_total_and_real_harness():
+    first = workflow("a", "2026-05-01 10:00:00", cost=3.0)
+    second = workflow("b", "2026-05-02 10:00:00", cost=9.0)
+    first.source, second.source = "OpenCode", "Claude Code"
+    app = app_with([first, second])
+    app.store.combined = True
+    app.set_browse_mode("harnesses")
+
+    total = "\n".join(app.renderer.harness_overview(app.harnesses[0], 100))
+    assert "Harnesses:     2" in total and "OpenCode" in total and "Claude Code" in total
+    real = next(row for row in app.harnesses if row.name == "Claude Code")
+    detail = "\n".join(app.renderer.harness_overview(real, 100))
+    assert "Harness:       Claude Code" in detail and "Sessions:      1" in detail
+
+    app.set_range_from_text("2026-05-01..2026-05-01")
+    filtered = "\n".join(app.renderer.harness_overview(app.harnesses[0], 100))
+    assert "Harnesses:     1" in filtered
+    assert "Only this harness" not in filtered
+
+    app.store.combined = False
+    narrow = app.renderer.harness_overview(app.harnesses[0], 36)
+    assert "Only this harness is loaded." in "\n".join(narrow)
+
+
+def test_narrow_harness_sidebar_keeps_cost_and_session_count():
+    first = workflow("a", "2026-05-01 10:00:00", cost=42.0)
+    first.source = "Claude Code"
+    app = app_with([first])
+    harness = app.harnesses[1]
+    harness.workflows = 12345
+    for width in (30, 36, 40, 48):
+        text = app.renderer.harness_row_text(harness, ">", width)
+        header = app.renderer.harness_header_text(width)
+        assert len(text) <= width and len(header) <= width
+        assert "$42" in text and "12345" in text
+        assert ("Tokens" in header) == (width >= 40)
+
+
+def test_harness_detail_dispatches_its_picker_tabs():
+    first = workflow("a", "2026-05-01 10:00:00", directory="/a")
+    second = workflow("b", "2026-05-02 10:00:00", directory="/b")
+    first.source, second.source = "OpenCode", "Claude Code"
+    app = app_with([first, second])
+    app.store.combined = True
+    app.set_browse_mode("harnesses")
+    app.drill_in()
+    called = []
+    app.renderer.box = lambda *args, **kwargs: None
+    app.renderer.draw_tabs = lambda *args, **kwargs: None
+    app.renderer.draw_sessions_picker = lambda *args: called.append("Sessions")
+    app.renderer.draw_projects_picker = lambda *args: called.append("Projects")
+    for tab in ("Projects", "Sessions"):
+        app.tab = app.current_tabs().index(tab)
+        app.renderer.draw_harness_detail(FakeScreen(20, 100), 0, 0, 20, 100)
+    assert called == ["Projects", "Sessions"]
+
+
 def test_machine_overview_shows_live_pulled_and_freshness_niceties():
     # The Machines-mode main view carries what the plain rollup can't: live vs pulled,
     # the pull time + version, and (for a pulled box) the summary-only caveat.

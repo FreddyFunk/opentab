@@ -125,6 +125,22 @@ class ProjectSummary:
     ignored: bool = False
 
 
+ALL_HARNESSES = "All harnesses"
+
+
+@dataclass
+class HarnessSummary:
+    name: str
+    workflows: int
+    cost: float
+    tokens: int
+    subagents: int
+    unpriced_tokens: int
+    last_active: str = ""
+    # Names are free text, so the synthetic total needs its own identity.
+    aggregate: bool = False
+
+
 # Display name only; ``MachineSummary.fleet`` is the identity because labels are free text.
 ALL_MACHINES = "all machines"
 

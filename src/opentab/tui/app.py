@@ -41,9 +41,11 @@ from opentab.heatmap import (
     week_key,
 )
 from opentab.models import (
+    ALL_HARNESSES,
     ALL_MACHINES,
     ALL_YEARS,
     DaySummary,
+    HarnessSummary,
     MachineSummary,
     MonthSummary,
     ProjectSummary,
@@ -223,12 +225,14 @@ class SelectionAnchor(NamedTuple):
     project: str | None
     machine: str | None  # "" identifies the synthetic fleet row
     session: str | None
+    harness: str | None  # "" identifies the synthetic all-harnesses row
 
 
 class App:
     BROWSE_MODES = (
         BrowseMode("time", "Time", "mode_time", True),
         BrowseMode("projects", "Projects", "mode_projects", False),
+        BrowseMode("harnesses", "Harnesses", "mode_harnesses", False),
         BrowseMode("machines", "Machines", "mode_machines", False),
     )
     BROWSE_MODE_KEYS = tuple(m.key for m in BROWSE_MODES)
@@ -237,6 +241,7 @@ class App:
     month_tabs = ("Overview", "Models", "Projects", "Sessions")
     year_tabs = ("Overview", "Models", "Projects", "Sessions")
     project_tabs = ("Overview", "Models", "Sessions")
+    harness_tabs = ("Overview", "Models", "Projects", "Sessions")
     machine_tabs = ("Overview", "Sessions", "Models", "Projects")
     sort_options = (
         "cost",
@@ -257,6 +262,7 @@ class App:
         "recency",
         "last_activity",
     )
+    harness_sort_options = ("cost", "tokens", "sessions", "harness")
     subagent_sort_options = ("cost", "tokens", "date", "title", "model", "agent", "depth")
     prices_sort_options = ("model", "eff", "use", "input", "output", "cache_read", "cache_write")
     # A ranked tab offers only visible columns; cost is the common fallback.
@@ -281,7 +287,9 @@ class App:
         ("provider", "by provider"),
         ("all", "models.dev"),
     )
-    ascending_sort_keys = frozenset({"title", "project", "model", "agent", "depth", "eff", "name"})
+    ascending_sort_keys = frozenset(
+        {"title", "project", "harness", "model", "agent", "depth", "eff", "name"}
+    )
     _TREND_TABS_BASE = (
         "Daily",
         "Weekly",
@@ -403,6 +411,7 @@ class App:
         self.month_index = 0
         self.year_index = 0
         self.project_index = 0
+        self.harness_index = 0
         self.machine_index = 0
         self._local_machine_fake = ""
         self.workflow_index = 0
@@ -483,9 +492,11 @@ class App:
         self.prices_view = "flat"
         self.sort_by = "cost"
         self.project_sort_by = "cost"
+        self.harness_sort_by = "cost"
         self.subagent_sort_by = "cost"
         self.sort_reverse = False
         self.project_sort_reverse = False
+        self.harness_sort_reverse = False
         self.subagent_sort_reverse = False
         self.ignored_projects: set[str] = set()
         self.ignored_sessions: set[str] = set()
@@ -683,6 +694,7 @@ class App:
         self.month_index = 0
         self.day_index = 0
         self.project_index = 0
+        self.harness_index = 0
         self.workflow_index = 0
         self.scroll = 0
 
@@ -855,6 +867,58 @@ class App:
         if sort_by == "last_activity":
             return sorted(rows, key=lambda p: p.last_activity, reverse=desc)
         return sorted(rows, key=lambda p: (p.cost, p.tokens), reverse=desc)
+
+    @property
+    def harnesses(self) -> list[HarnessSummary]:
+        source = self.ranged_workflows if self.show_ignored_projects else self.all_workflows
+        grouped: dict[str, list[Workflow]] = defaultdict(list)
+        for workflow in source:
+            grouped[workflow.source or "unknown"].append(workflow)
+        rows = [self._harness_summary(name, workflows) for name, workflows in grouped.items()]
+        rows = self.sorted_harnesses(rows)
+        return [self._harness_summary(ALL_HARNESSES, source, aggregate=True), *rows]
+
+    @staticmethod
+    def _harness_summary(
+        name: str, workflows: list[Workflow], aggregate: bool = False
+    ) -> HarnessSummary:
+        return HarnessSummary(
+            name=name,
+            workflows=len(workflows),
+            cost=sum(w.total_cost for w in workflows),
+            tokens=sum(w.total_tokens for w in workflows),
+            subagents=sum(w.subagents for w in workflows),
+            unpriced_tokens=sum(w.unpriced_tokens for w in workflows),
+            last_active=max((w.ended_at or w.created_at for w in workflows), default=""),
+            aggregate=aggregate,
+        )
+
+    def sorted_harnesses(self, rows: list[HarnessSummary]) -> list[HarnessSummary]:
+        sort_by = self.harness_sort_key()
+        desc = self.sort_descending(sort_by, self.harness_sort_reverse)
+        if sort_by == "tokens":
+            return sorted(rows, key=lambda row: (row.tokens, row.cost), reverse=desc)
+        if sort_by == "sessions":
+            return sorted(rows, key=lambda row: (row.workflows, row.cost), reverse=desc)
+        if sort_by == "harness":
+            return sorted(rows, key=lambda row: row.name.lower(), reverse=desc)
+        return sorted(rows, key=lambda row: (row.cost, row.tokens), reverse=desc)
+
+    @property
+    def selected_harness_summary(self) -> HarnessSummary | None:
+        rows = self.harnesses
+        if not rows:
+            return None
+        self.harness_index = max(0, min(self.harness_index, len(rows) - 1))
+        return rows[self.harness_index]
+
+    def harness_scope(
+        self, harness: HarnessSummary, include_ignored: bool = False
+    ) -> list[Workflow]:
+        source = self.ranged_workflows if include_ignored else self.all_workflows
+        if harness.aggregate:
+            return list(source)
+        return [w for w in source if (w.source or "unknown") == harness.name]
 
     def machine_meta(self) -> dict[str, dict]:
         return getattr(self.store, "machine_meta", {}) or {}
@@ -1378,6 +1442,7 @@ class App:
         project = self.selected_project_summary
         # Empty string safely identifies the fleet row because real machines always have names.
         machine = self.selected_machine_summary if self.browse_mode == "machines" else None
+        harness = self.selected_harness_summary if self.browse_mode == "harnesses" else None
         session = self.current_session()
         return SelectionAnchor(
             year=year,
@@ -1386,11 +1451,13 @@ class App:
             project=project.directory if project else None,
             machine=None if machine is None else ("" if machine.fleet else machine.name),
             session=session.id if session else None,
+            harness=None if harness is None else ("" if harness.aggregate else harness.name),
         )
 
     def restore_selection(self, anchor: SelectionAnchor) -> None:
         year, month, day = anchor.year, anchor.month, anchor.day
         project_dir, machine_name, session_id = anchor.project, anchor.machine, anchor.session
+        harness_name = anchor.harness
 
         # Restore parents before children because month/day lists are scoped.
         year_rows = self.years
@@ -1449,6 +1516,26 @@ class App:
             )
         else:
             self.machine_index = min(self.machine_index, max(0, len(machine_rows) - 1))
+
+        harness_rows = self.harnesses
+        if harness_name is not None and harness_rows:
+            found = next(
+                (
+                    i
+                    for i, row in enumerate(harness_rows)
+                    if (
+                        row.aggregate
+                        if harness_name == ""
+                        else (not row.aggregate and row.name == harness_name)
+                    )
+                ),
+                None,
+            )
+            self.harness_index = (
+                found if found is not None else min(self.harness_index, len(harness_rows) - 1)
+            )
+        else:
+            self.harness_index = min(self.harness_index, max(0, len(harness_rows) - 1))
 
         session_rows = self.current_sessions()
         if session_id and session_rows:
@@ -2765,6 +2852,7 @@ class App:
         )
 
     def reload(self) -> None:
+        anchor = self.selection_anchor()
         self._clear_trace_expansion()
         self.loaded = self.store.workflows()
         self._snapshot_real_costs()
@@ -2792,7 +2880,9 @@ class App:
         self.day_index = min(self.day_index, max(0, len(self.days) - 1))
         self.month_index = min(self.month_index, max(0, len(self.months) - 1))
         self.project_index = min(self.project_index, max(0, len(self.projects) - 1))
+        self.harness_index = min(self.harness_index, max(0, len(self.harnesses) - 1))
         self.machine_index = min(self.machine_index, max(0, len(self.machines) - 1))
+        self.restore_selection(anchor)
         if notes_ok:
             self.notify("reloaded", "success")
 
@@ -3166,6 +3256,7 @@ class App:
         self.focus = "days"
         self.tab = self.scroll = 0
         self.workflow_index = self.month_index = self.day_index = self.project_index = 0
+        self.harness_index = 0
         self._anchor_default_selection()
         if self._notes_ok:
             self.notice = f"source: {self.store.source_name}"
@@ -3268,6 +3359,16 @@ class App:
         ]
         return "machines", header, rows
 
+    @staticmethod
+    def _harnesses_dataset(
+        harnesses: list[HarnessSummary],
+    ) -> tuple[str, list[str], list[list]]:
+        header = ["harness", "cost", "tokens", "sessions", "subagents", "aggregate"]
+        rows = [
+            [h.name, h.cost, h.tokens, h.workflows, h.subagents, h.aggregate] for h in harnesses
+        ]
+        return "harnesses", header, rows
+
     def _active_tab(self) -> str:
         tabs = self.current_tabs()
         return tabs[self.tab % len(tabs)] if tabs else ""
@@ -3282,6 +3383,8 @@ class App:
             return self._zoom_tab_dataset()
         if self.browse_mode == "machines":
             return self._machines_dataset(self.machines)
+        if self.browse_mode == "harnesses":
+            return self._harnesses_dataset(self.harnesses)
         if self.browse_mode == "projects":
             return self._projects_dataset(self.projects)
         if self.focus == "years":
@@ -3562,6 +3665,13 @@ class App:
         if self.browse_mode == "machines":
             machine = self.selected_machine_summary
             return self.machine_scope(machine) if machine else []
+        if self.browse_mode == "harnesses":
+            harness = self.selected_harness_summary
+            return (
+                self.harness_scope(harness, include_ignored=self.show_ignored_projects)
+                if harness
+                else []
+            )
         if self.browse_mode == "projects":
             project = self.selected_project_summary
             return (
@@ -4060,6 +4170,11 @@ class App:
         if self.browse_mode == "machines":
             item = self.selected_machine_summary
             base = self.machine_scope(item) if item else []
+        elif self.browse_mode == "harnesses":
+            item = self.selected_harness_summary
+            base = (
+                self.harness_scope(item, include_ignored=self.show_ignored_projects) if item else []
+            )
         else:
             base = self.zoom_scope_workflows(include_ignored=self.show_ignored_projects)
         return self.projects_for_workflows(base, include_ignored=self.show_ignored_projects)
@@ -4091,6 +4206,11 @@ class App:
         if self.browse_mode == "machines":
             item = self.selected_machine_summary
             return self.machine_scope(item) if item else []
+        if self.browse_mode == "harnesses":
+            item = self.selected_harness_summary
+            return (
+                self.harness_scope(item, include_ignored=self.show_ignored_projects) if item else []
+            )
         if self.browse_mode == "projects":
             item = self.selected_project_summary
             if item is None:
@@ -4149,6 +4269,11 @@ class App:
         if self.browse_mode == "machines":
             item = self.selected_machine_summary
             return self.machine_scope(item) if item else []
+        if self.browse_mode == "harnesses":
+            item = self.selected_harness_summary
+            return (
+                self.harness_scope(item, include_ignored=self.show_ignored_projects) if item else []
+            )
         if self.browse_mode == "projects":
             item = self.selected_project_summary
             return (
@@ -4379,6 +4504,9 @@ class App:
             self.view != "session" and self.on_projects_tab
         )
 
+    def in_harness_sort_context(self) -> bool:
+        return self.view == "browse" and self.browse_mode == "harnesses"
+
     def in_prices_sort_context(self) -> bool:
         # The P overlay's model list (not its per-model session drill-in) is sortable
         # by column, so it gets its own sort state (prices_sort/prices_sort_reverse).
@@ -4443,6 +4571,13 @@ class App:
             else self.project_sort_options[0]
         )
 
+    def harness_sort_key(self) -> str:
+        return (
+            self.harness_sort_by
+            if self.harness_sort_by in self.harness_sort_options
+            else self.harness_sort_options[0]
+        )
+
     def subagent_sort_key(self) -> str:
         return (
             self.subagent_sort_by
@@ -4454,6 +4589,7 @@ class App:
         return (
             self.in_prices_sort_context()
             or self.in_trend_sort_context()
+            or self.in_harness_sort_context()
             or self.in_project_sort_context()
             or (self.view != "session" and self.on_sessions_tab)
             or self.in_subagent_sort_context()
@@ -4484,6 +4620,8 @@ class App:
             return self.prices_sort  # always a column ("eff" by default), so it arrows
         if self.in_trend_sort_context():
             return self.trend_sort_key()  # validated for the tab that is drawing
+        if self.in_harness_sort_context():
+            return self.harness_sort_key()
         if self.in_project_sort_context():
             return self.project_sort_key()
         if self.in_subagent_sort_context():
@@ -4506,6 +4644,8 @@ class App:
             return self.prices_sort_options
         if self.in_trend_sort_context():
             return self.trend_sort_options()
+        if self.in_harness_sort_context():
+            return self.harness_sort_options
         if self.in_project_sort_context():
             return self.project_sort_options
         return self.current_sort_options()
@@ -4535,6 +4675,12 @@ class App:
             return
         if self.in_trend_sort_context():
             self._resort_trends(value, reverse=False)
+            return
+        if self.in_harness_sort_context():
+            self.harness_sort_by = value
+            self.harness_sort_reverse = False
+            self.harness_index = 0
+            self.scroll = 0
             return
         if self.in_subagent_sort_context():
             self.subagent_sort_by = value
@@ -4600,6 +4746,17 @@ class App:
             else:
                 self.subagent_sort_by = key
                 self.subagent_sort_reverse = False
+            self.scroll = 0
+            return
+        if target == "harness":
+            if key not in self.harness_sort_options:
+                return
+            if self.harness_sort_by == key:
+                self.harness_sort_reverse = not self.harness_sort_reverse
+            else:
+                self.harness_sort_by = key
+                self.harness_sort_reverse = False
+            self.harness_index = 0
             self.scroll = 0
             return
         if target == "project":
@@ -4815,6 +4972,8 @@ class App:
         self.workflow_index = 0
         if mode == "machines":
             self.machine_index = 0
+        elif mode == "harnesses":
+            self.harness_index = 0
         self._clear_zoom_drills()
 
     def _restore_mode_memory(self, saved: dict) -> None:
@@ -4856,6 +5015,8 @@ class App:
             item = (
                 self.selected_machine_summary
                 if self.browse_mode == "machines"
+                else self.selected_harness_summary
+                if self.browse_mode == "harnesses"
                 else self.selected_project_summary
                 if self.browse_mode == "projects"
                 else self.selected_year_summary
@@ -5118,6 +5279,10 @@ class App:
             n = len(self.machines)
             if n:
                 self.machine_index = max(0, min(self.machine_index + delta, n - 1))
+        elif self.browse_mode == "harnesses":
+            n = len(self.harnesses)
+            if n:
+                self.harness_index = max(0, min(self.harness_index + delta, n - 1))
         elif self.browse_mode == "projects":
             n = len(self.projects)
             if n:
@@ -5232,6 +5397,10 @@ class App:
             if new != self.machine_index and self.view == "zoom":
                 self._clear_box_drills()  # a NEW box; wheeling in place must keep the drill
             self.machine_index = new
+        elif kind == "harness" and self.harnesses:
+            new = max(0, min(self.harness_index + delta, len(self.harnesses) - 1))
+            self._wheel_rescoped("harness", new != self.harness_index)
+            self.harness_index = new
         elif kind == "session":
             n = len(self.current_sessions())
             if n:
@@ -5271,6 +5440,10 @@ class App:
                 rows = self.machines
                 if rows:
                     self.machine_index = len(rows) - 1 if to_end else 0
+            elif self.browse_mode == "harnesses":
+                rows = self.harnesses
+                if rows:
+                    self.harness_index = len(rows) - 1 if to_end else 0
             elif self.browse_mode == "projects":
                 rows = self.projects
                 if rows:
@@ -6582,6 +6755,9 @@ class App:
         if act == "mode_projects":
             self.set_browse_mode("projects")
             return True
+        if act == "mode_harnesses":
+            self.set_browse_mode("harnesses")
+            return True
         if act == "mode_time":
             self.set_browse_mode("time")
             return True
@@ -7319,6 +7495,15 @@ class App:
                 self.workflow_index = 0
                 self.scroll = 0
                 return
+        elif kind == "harness":
+            changed = value != self.harness_index
+            self.harness_index = value
+            if self.view == "zoom":
+                if changed:
+                    self._clear_zoom_drills()
+                self.workflow_index = 0
+                self.scroll = 0
+                return
         elif kind == "session":
             self.workflow_index = value
         elif kind == "zoomproject":
@@ -7507,6 +7692,8 @@ class App:
             return ("Economics", "Sessions")
         if self.browse_mode == "machines":
             base = self.machine_tabs
+        elif self.browse_mode == "harnesses":
+            base = self.harness_tabs
         elif self.browse_mode == "projects":
             base = self.project_tabs
         elif self.focus == "years":
@@ -7516,7 +7703,7 @@ class App:
         # In the merged view a per-source cut is meaningful, so expose it right
         # after Overview. With one backend every row is the same source (a 100%
         # bar), so the tab would be noise -- omit it unless sources are combined.
-        if getattr(self.store, "combined", False):
+        if getattr(self.store, "combined", False) and self.browse_mode != "harnesses":
             base = base[:1] + ("Harnesses",) + base[1:]
         # The fleet's per-scope Machines picker (this month/day/project, cut by box):
         # right after Harnesses. Not in Machines MODE (already scoped to one box) and

@@ -19,14 +19,18 @@ The older `--web`, `--serve`, and `--html` flags remain available.
 (default `opentab-report.html`) — no server, no dependencies, works from disk or any
 static host.
 
+- The top browse bar switches between **Time**, **Projects**, **Harnesses**, and
+  **Machines** (`t`/`p`/`u`/`m`). Harnesses is available even when the report contains
+  only one source; its synthetic **all harnesses** row and source rows show spend and
+  session counts within the active range. This is report navigation, not source switching.
 - The same sidebar (Years appear with >1 year of data), the same per-scope detail
   tabs, Trends (`T`) and the price table (`P`) as overlays, live range scoping (`R`)
   and colour themes (`C`).
-- Driven by the TUI keys (`j`/`k`, `Tab`, `h`/`l`, `Esc`, `$`, `w`, `p`/`t`, `T`, `P`,
+- Driven by the TUI keys (`j`/`k`, `1`–`9`, `Tab`, `h`/`l`, `Esc`, `$`, `w`, `p`/`t`/`u`/`m`, `T`, `P`,
   `R`, `W`) or the mouse; every table sorts on a header click. `W` (or the visible
   header action) opens the bundled What's New panel without checking for updates.
-- Time, project, machine and session scopes have **shareable deep links**
-  (`#/m/2026-06`, `#/s/<session>`, …), and the browser's back button steps out.
+- Time, project, harness, machine and session scopes have **shareable deep links**
+  (`#/m/2026-06`, `#/h/<harness>`, `#/s/<session>`, …), and the browser's back button steps out.
   In-place drills and overlay state are not encoded in the URL.
 - `$` toggles the what-if estimate instantly — both cost snapshots travel in the
   page, so it's a client-side swap, never a reprice.
@@ -38,6 +42,10 @@ static host.
 Static HTML omits the per-session **Turns / Tools / Context** tabs: embedding them
 would require scanning every session up front. It is a snapshot, not a live view;
 generate it again to include new usage.
+
+A report generated from one selected harness contains only that loaded source. The
+Harnesses sidebar says so explicitly; generate with `opentab web --harness all` to
+compare all discovered harnesses in one report.
 
 ## Drilling a model
 

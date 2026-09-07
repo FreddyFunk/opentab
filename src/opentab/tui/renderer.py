@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from opentab import __version__
 from opentab.models import (
     DaySummary,
+    HarnessSummary,
     MachineSummary,
     MonthSummary,
     ProjectSummary,
@@ -142,6 +143,12 @@ class Renderer:
         ("tokens", "Tokens"),
         ("sessions", "Ses"),
         ("subagents", "Subagents"),
+    )
+    HARNESS_SORT_COLUMNS = (
+        ("harness", "Harness"),
+        ("cost", "Cost"),
+        ("tokens", "Tokens"),
+        ("sessions", "Ses"),
     )
     SUBAGENT_SORT_COLUMNS = (
         ("date", "Started"),
@@ -481,9 +488,40 @@ class Renderer:
         natural = max(longest, len("Machine")) + 31
         return max(24, min(natural, width // 2, max(24, width - 44)))
 
+    @staticmethod
+    def harness_name_width(width: int) -> int:
+        return max(8, width - (25 if width >= 40 else 18))
+
+    def harness_row_text(self, harness: HarnessSummary, marker: str, width: int) -> str:
+        name_width = self.harness_name_width(width)
+        badge = "∑ " if harness.aggregate else ""
+        name = shorten(badge + harness.name, name_width)
+        token_cell = f" {human_tokens(harness.tokens):>6}" if width >= 40 else ""
+        return (
+            f"{marker} {pad(name, name_width)} "
+            f"{money_whole(harness.cost):>7}{token_cell} "
+            f"{harness.workflows:>7}"
+        )
+
+    def harness_header_text(self, width: int) -> str:
+        name_width = self.harness_name_width(width)
+        token_cell = f" {self.harness_sort_heading('tokens', 'Tokens'):>6}" if width >= 40 else ""
+        return (
+            f"  {self.harness_sort_heading('harness', 'Harness'):{name_width}} "
+            f"{self.harness_sort_heading('cost', 'Cost'):>7}{token_cell} "
+            f"{self.harness_sort_heading('sessions', 'Ses'):>7}"
+        )
+
+    def harnesses_left_width(self, width: int) -> int:
+        longest = max((display_width(h.name) for h in self.harnesses), default=8)
+        natural = max(longest + 2, len("Harness")) + 31
+        return max(24, min(natural, width // 2, max(24, width - 44)))
+
     def browse_left_width(self, width: int) -> int:
         if self.browse_mode == "machines":
             return self.machines_left_width(width)
+        if self.browse_mode == "harnesses":
+            return self.harnesses_left_width(width)
         if self.browse_mode == "projects":
             return self.projects_left_width(width)
         # Reserve the spend-bar lane without starving the detail pane below 44 columns.
@@ -603,6 +641,20 @@ class Renderer:
                 if current == "Projects":
                     return self.machine_projects(machine, content_width)
                 return self.machine_workflows(machine, content_width)
+            if self.browse_mode == "harnesses":
+                harness = self.selected_harness_summary
+                if harness is None:
+                    return []
+                current = self.current_tabs()[self.tab % len(self.current_tabs())]
+                if current == "Overview":
+                    return self.harness_overview(harness, content_width)
+                if current == "Models":
+                    return self.harness_models(harness, content_width)
+                if current == "Projects":
+                    return self.harness_projects(harness, content_width)
+                if current == "Machines":
+                    return self.harness_machines(harness, content_width)
+                return self.harness_workflows(harness, content_width)
             if self.browse_mode == "projects":
                 project = self.selected_project_summary
                 if project is None:
@@ -718,6 +770,8 @@ class Renderer:
                 left = self.browse_left_width(width)
                 if self.browse_mode == "machines":
                     self.draw_machine_list(stdscr, top, 0, avail, left, active=False)
+                elif self.browse_mode == "harnesses":
+                    self.draw_harness_list(stdscr, top, 0, avail, left, active=False)
                 elif self.browse_mode == "projects":
                     self.draw_project_list(stdscr, top, 0, avail, left, active=False)
                 else:
@@ -725,6 +779,8 @@ class Renderer:
                 zx, zw = left, width - left
             if self.browse_mode == "machines":
                 self.draw_machine_detail(stdscr, top, zx, avail, zw)
+            elif self.browse_mode == "harnesses":
+                self.draw_harness_detail(stdscr, top, zx, avail, zw)
             elif self.browse_mode == "projects":
                 self.draw_project_detail(stdscr, top, zx, avail, zw)
             elif self.focus == "years":
@@ -737,6 +793,11 @@ class Renderer:
             left = self.browse_left_width(width)
             self.draw_machine_list(stdscr, top, 0, avail, left)
             self.draw_machine_detail(stdscr, top, left, avail, width - left, active=False)
+            self._add_rows_region("detail", top, left, width - 1, 0, avail)
+        elif self.browse_mode == "harnesses":
+            left = self.browse_left_width(width)
+            self.draw_harness_list(stdscr, top, 0, avail, left)
+            self.draw_harness_detail(stdscr, top, left, avail, width - left, active=False)
             self._add_rows_region("detail", top, left, width - 1, 0, avail)
         elif self.browse_mode == "projects":
             left = self.browse_left_width(width)
@@ -925,6 +986,14 @@ class Renderer:
                 segs.append(self.zoom_model)
             segs.append(tab_name)
             return sep.join(s for s in segs if s)
+        if self.browse_mode == "harnesses" and self.view != "session":
+            harness = self.selected_harness_summary
+            segs.append("harnesses")
+            if harness:
+                segs.append(f"∑ {harness.name}" if harness.aggregate else harness.name)
+            segs.extend(self._drill_crumbs(self.on_sessions_tab or bool(self.zoom_model)))
+            segs.append(tab_name)
+            return sep.join(s for s in segs if s)
         if self.browse_mode == "projects" and self.view != "session":
             project = self.selected_project_summary
             segs.append("projects")
@@ -938,6 +1007,10 @@ class Renderer:
                 machine = self.selected_machine_summary
                 if machine:
                     segs.append(self.machine_crumb(machine))
+            elif self.browse_mode == "harnesses":
+                harness = self.selected_harness_summary
+                if harness:
+                    segs.append(f"∑ {harness.name}" if harness.aggregate else harness.name)
             elif self.browse_mode == "projects":
                 project = self.selected_project_summary
                 if project:
@@ -1071,6 +1144,12 @@ class Renderer:
         desc = self.sort_descending(key, self.project_sort_reverse)
         return f"{label} {'v' if desc else '^'}"
 
+    def harness_sort_heading(self, key: str, label: str) -> str:
+        if self.harness_sort_key() != key:
+            return label
+        desc = self.sort_descending(key, self.harness_sort_reverse)
+        return f"{label} {'v' if desc else '^'}"
+
     def subagent_sort_heading(self, key: str, label: str) -> str:
         if self.subagent_sort_key() != key:
             return label
@@ -1085,7 +1164,7 @@ class Renderer:
         return f"{label} {'v' if desc else '^'}"
 
     def _scope_spans_days(self) -> bool:
-        return self.browse_mode in ("projects", "machines") or self.focus != "days"
+        return self.browse_mode in ("projects", "harnesses", "machines") or self.focus != "days"
 
     def session_started(self, workflow: Workflow) -> str:
         return workflow.created_at[:10] if self._scope_spans_days() else workflow.created_at[11:16]
@@ -1987,6 +2066,174 @@ class Renderer:
                     human_tokens(machine.tokens),
                     w - 2,
                 )
+
+    def draw_harness_list(
+        self, stdscr: curses.window, y: int, x: int, h: int, w: int, active: bool = True
+    ) -> None:
+        self.box(stdscr, y, x, h, w, self.panel_title(1, "Harnesses", active), active=active)
+        rows = self.harnesses
+        header = self.harness_header_text(w - 2)
+        self._paint_box_header(stdscr, y + 1, x + 1, header, w - 2)
+        self._register_sort_header(
+            y + 1, x + 1, header, self.HARNESS_SORT_COLUMNS, "harness", w - 2
+        )
+        visible = h - 4
+        start = max(0, min(self.harness_index - visible // 2, max(0, len(rows) - visible)))
+        self._add_rows_region(
+            "harness", y + 3, x, x + w - 1, start, len(rows[start : start + visible])
+        )
+        for row_y, harness in enumerate(rows[start : start + visible], y + 3):
+            selected = start + row_y - (y + 3) == self.harness_index
+            text = self.harness_row_text(harness, ">" if selected else " ", w - 2)
+            if selected and active:
+                self.write(
+                    stdscr,
+                    row_y,
+                    x + 1,
+                    pad(shorten(text, w - 2), w - 2),
+                    curses.A_REVERSE | curses.A_BOLD,
+                )
+            elif selected:
+                self.write(
+                    stdscr,
+                    row_y,
+                    x + 1,
+                    pad(shorten(text, w - 2), w - 2),
+                    curses.color_pair(1) | curses.A_BOLD,
+                )
+            else:
+                self.write_colored_summary_row(
+                    stdscr,
+                    row_y,
+                    x + 1,
+                    text,
+                    money_whole(harness.cost),
+                    human_tokens(harness.tokens),
+                    w - 2,
+                )
+
+    def draw_harness_detail(
+        self, stdscr: curses.window, y: int, x: int, h: int, w: int, active: bool = True
+    ) -> None:
+        harness = self.selected_harness_summary
+        title = (
+            "Harness"
+            if harness is None
+            else "All harnesses"
+            if harness.aggregate
+            else f"Harness {shorten(harness.name, max(8, w - 12))}"
+        )
+        self.box(stdscr, y, x, h, w, self.panel_title(0, title), active=active)
+        if harness is None:
+            self.write(stdscr, y + 2, x + 2, "No harness selected.", curses.color_pair(1))
+            return
+        self.draw_tabs(stdscr, y + 1, x + 1, w - 2, self.current_tabs(), self.tab, rule=True)
+        current = self.current_tabs()[self.tab % len(self.current_tabs())]
+        if current == "Sessions" and self.view == "zoom":
+            self.draw_sessions_picker(stdscr, y, x, h, w)
+            return
+        if current == "Projects" and self.view == "zoom":
+            self.draw_projects_picker(stdscr, y, x, h, w)
+            return
+        if current == "Machines" and self.view == "zoom":
+            self.draw_machines_picker(stdscr, y, x, h, w)
+            return
+        if current == "Economics":
+            lines = self.model_scope_overview(w - 4)
+        elif current == "Overview":
+            lines = self.harness_overview(harness, w - 4)
+        elif current == "Models":
+            lines = self.harness_models(harness, w - 4)
+        elif current == "Projects":
+            lines = self.harness_projects(harness, w - 4)
+        elif current == "Machines":
+            lines = self.harness_machines(harness, w - 4)
+        else:
+            lines = self.harness_workflows(harness, w - 4)
+        self._paint_detail_lines(stdscr, y, x, h, w, lines, active)
+
+    def harness_overview(self, harness: HarnessSummary, width: int) -> list[str]:
+        workflows = self.harness_scope(harness, include_ignored=self.show_ignored_projects)
+        if harness.aggregate:
+            lines = self._stat_card(
+                "# Harnesses",
+                [
+                    f"Harnesses:     {max(0, len(self.harnesses) - 1)}",
+                    f"Cost:          {money(harness.cost)}",
+                    f"Tokens:        {tokens(harness.tokens)}",
+                    f"Sessions:      {harness.workflows}",
+                    f"Subagents:     {harness.subagents}",
+                    f"Last active:   {harness.last_active[:16]}",
+                ],
+                width,
+            )
+            lines += ["", *self.source_table(workflows, width)]
+        else:
+            share_total = (
+                sum(w.total_cost for w in self.ranged_workflows)
+                if self.show_ignored_projects
+                else self.range_cost_total()
+            )
+            lines = self._stat_card(
+                "# Harness",
+                [
+                    f"Harness:       {harness.name}",
+                    f"Cost:          {money(harness.cost)}",
+                    f"Share:         {pct(harness.cost, share_total)}",
+                    f"Tokens:        {tokens(harness.tokens)}",
+                    f"Sessions:      {harness.workflows}",
+                    f"Subagents:     {harness.subagents}",
+                    f"Last active:   {harness.last_active[:16]}",
+                ],
+                width,
+                [self.unpriced_hint()] if harness.unpriced_tokens else [],
+            )
+        if not getattr(self.store, "combined", False):
+            key = self._key("main", "harness")
+            lines += [
+                "",
+                *textwrap.wrap(
+                    f"Only this harness is loaded. Use {key} to combine detected tools when available.",
+                    max(12, width),
+                ),
+            ]
+        lines += ["", *self._token_economics_box(workflows, width)]
+        if self.projects_for_workflows(workflows):
+            lines += ["", *self._top_projects_box(workflows, harness.cost, width)]
+        lines += [
+            "",
+            *self._model_table(
+                self._agg_rows(self.aggregate_models(workflows)), "# Top Models", width
+            ),
+        ]
+        return lines
+
+    def harness_models(self, harness: HarnessSummary, width: int) -> list[str]:
+        rows = self.compose_zoom_drills(
+            self.harness_scope(harness, include_ignored=self.show_ignored_projects)
+        )
+        return self._models_tab(
+            self._agg_rows(self.aggregate_models(rows)), "# Harness Model Spend", width
+        )
+
+    def harness_projects(self, harness: HarnessSummary, width: int) -> list[str]:
+        rows = self.harness_scope(harness, include_ignored=self.show_ignored_projects)
+        return self.project_table(
+            self.projects_for_workflows(rows, include_ignored=self.show_ignored_projects), width
+        )
+
+    def harness_machines(self, harness: HarnessSummary, width: int) -> list[str]:
+        return self.machine_table(
+            self.scoped_sessions(
+                self.harness_scope(harness, include_ignored=self.show_ignored_projects)
+            ),
+            width,
+        )
+
+    def harness_workflows(self, harness: HarnessSummary, width: int) -> list[str]:
+        return self.session_table(
+            self.harness_scope(harness, include_ignored=self.show_ignored_projects), width
+        )
 
     def draw_machine_detail(
         self, stdscr: curses.window, y: int, x: int, h: int, w: int, active: bool = True
@@ -6004,6 +6251,7 @@ class Renderer:
         "sessions": "Sessions",
         "title": "Title",
         "project": "Project",
+        "harness": "Harness",
         "model": "Model",
         "agent": "Agent",
         "depth": "Depth",

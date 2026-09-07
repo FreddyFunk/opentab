@@ -241,7 +241,13 @@ def _enter_opens_something(app: App) -> bool:
 
 def _enter_summary(app: App) -> str:
     if app.view == "browse":
-        what = app.browse_mode.rstrip("s") if app.flat_browse_mode else app.focus.rstrip("s")
+        what = (
+            "harness"
+            if app.browse_mode == "harnesses"
+            else app.browse_mode.rstrip("s")
+            if app.flat_browse_mode
+            else app.focus.rstrip("s")
+        )
         return f"drill into the selected {what}"
     tab = app.active_tab_name()
     if tab == "Sessions":
@@ -646,7 +652,7 @@ KEYS: tuple[Key, ...] = (
         id="mode",
         ctx="main",
         keys=_mode_keys,
-        summary="Time / Projects / Machines browse mode",
+        summary="Time / Projects / Harnesses / Machines browse mode",
         section="nav",
         # Mode switching snapshots drilled session state and works from a session.
         when=in_main,

@@ -49,11 +49,17 @@ The session layout is full-screen regardless of that flag; changing it there
 affects the zoom layout on return. A browse preview's trailing `detail` click
 region focuses it, but its more specific table and tab regions take precedence.
 
-`BROWSE_MODES` describes Time, Projects, and Machines, including their labels,
+`BROWSE_MODES` describes Time, Projects, Harnesses, and Machines, including their labels,
 actions, and hierarchical/flat distinction. It feeds the mode strip, help/footer,
-and restored-mode validation. Time has a Years/Months/Days hierarchy; Projects
-and Machines have flat sidebars. Their different geometry stays in explicit
+and restored-mode validation. Time has a Years/Months/Days hierarchy; Projects,
+Harnesses and Machines have flat sidebars. Their different geometry stays in explicit
 drawers rather than being forced into one generic panel implementation.
+
+Harnesses groups the loaded, ranged workflows by source without switching stores.
+`HarnessSummary.aggregate` identifies the synthetic total independently of its
+display name. The sidebar selection has its own cursor and value anchor, separate
+from the nested `zoom_source` drill and the global harness picker. Detail queries
+never filter this sidebar; project, machine and model drills compose within it.
 
 `mode_scope_workflows()` answers which sessions the sidebar selection covers.
 `current_sessions()` applies in-scope drills and filtering to that base. A picker
@@ -91,7 +97,7 @@ appropriate. Wheel handling respects the focused scope, not just the hovered pan
 ### Keeping Selection Stable
 
 Indices are useful within a displayed list but are not identities across a
-rebuild. `SelectionAnchor` stores year, month, day, project, machine, and session
+rebuild. `SelectionAnchor` stores year, month, day, project, machine, session, and harness
 values. `restore_selection()` resolves parents before children because each
 parent changes the next list. Movement clamps an old cursor before stepping it.
 

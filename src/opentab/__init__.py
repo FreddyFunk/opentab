@@ -88,10 +88,12 @@ from opentab.heatmap import (
     week_key,
 )
 from opentab.models import (
+    ALL_HARNESSES,
     ALL_MACHINES,
     ALL_YEARS,
     API_SCHEMA_VERSION,
     DaySummary,
+    HarnessSummary,
     MachineSummary,
     MonthSummary,
     ProjectSummary,

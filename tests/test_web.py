@@ -526,6 +526,93 @@ def test_web_shipped_javascript_parses():
     assert result.returncode == 0, result.stderr
 
 
+def test_web_harness_browse_executes_shipped_javascript():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript behavior check: Node.js is not installed (required in CI)")
+        return
+    source = ot.webpage._JS
+
+    def between(start, end):
+        return source[source.index(start) : source.index(end, source.index(start))]
+
+    shipped = "\n".join(
+        [
+            between("function groupBy(", "function scopeStats("),
+            between("function sourceRows(", "function machineRows("),
+            between("function msubFilter(", "const MMETA"),
+            between("function go(", "function isoToday("),
+            between("function filterRange(", "function applyRange("),
+            between("function setBrowse(", "function scopeWorkflows("),
+            between("function scopeWorkflows(", "// Keep per-scope tab order"),
+            between("function tabsFor(", "function sideRow("),
+            between("function sidebarList(", "document.addEventListener('keydown'"),
+            between("function openSession(", "// Navigation and range changes"),
+        ]
+    )
+    harness = (
+        r"""
+const META={source:'fallback',machines:true,combined:true};
+const DATA={models:{}};
+const ALL_W=[
+  {id:'a',source:'Claude & /',machine:'desk',project:'/p/one',date:'2026-08-02',real:2,api:20,tokens:20},
+  {id:'b',source:'Claude & /',machine:'laptop',project:'/p/two',date:'2026-08-03',real:3,api:30,tokens:30},
+  {id:'c',source:'Codex',machine:'desk',project:'/p/one',date:'2026-08-04',real:5,api:50,tokens:50},
+  {id:'old',source:'Codex',machine:'desk',project:'/p/old',date:'2025-01-01',real:99,api:990,tokens:990}
+];
+let MODE='real', RANGE={kind:'since',since:'2026-08-01',until:'2026-08-31'};
+const cost=w=>MODE==='api'?w.api:w.real;
+const sum=(rows,f)=>rows.reduce((a,r)=>a+f(r),0);
+let location={hash:'#/h/Claude%20%26%20%2F'};
+let W, BROWSE='time', FOCUS='months', TAB='Overview', MSUB=null, RETURN=null;
+let FILTER='', EXTRAS={id:null,loading:false,turns:[],tools:[],context:null};
+function render(){}
+function machineRows(){return []} function projectRows(){return []}
+function distinctYears(){return []} function scopeYear(){return null}
+function monthRows(){return []} function dayRows(){return []}
+const MMETA={};
+"""
+        + shipped
+        + r"""
+W=filterRange(ALL_W);
+const escaped=curScope();
+const scoped=scopeWorkflows(escaped);
+MSUB={dim:'machine',value:'desk'};
+const machineScoped=msubFilter(scoped);
+MSUB=null;
+const aggregates=sourceRows(W).sort((a,b)=>a.source.localeCompare(b.source));
+const tabs=tabsFor(escaped);
+BROWSE='harnesses'; FOCUS='harnesses';
+const list=sidebarList(escaped);
+list.rows[0].go(); const allRoute=location.hash; const allScope=curScope();
+list.rows[1].go(); const firstRoute=location.hash;
+location.hash='#/p/%2Fp%2Fone'; setBrowse('harnesses'); const modeRoute=location.hash;
+location.hash='#/h/Claude%20%26%20%2F'; openSession('a');
+console.log(JSON.stringify({escaped, scoped:scoped.map(w=>w.id), machineScoped:machineScoped.map(w=>w.id),
+  aggregates:aggregates.map(r=>[r.source,r.cost,r.sessions]), tabs, listSize:list.rows.length,
+  allRoute, allKind:allScope.kind, firstRoute, modeRoute, sessionRoute:location.hash,
+  sessionReturn:RETURN && RETURN.from}));
+"""
+    )
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    assert actual == {
+        "escaped": {"kind": "h", "source": "Claude & /"},
+        "scoped": ["a", "b"],
+        "machineScoped": ["a"],
+        "aggregates": [["Claude & /", 5, 2], ["Codex", 5, 1]],
+        "tabs": ["Overview", "Machines", "Models", "Projects", "Sessions"],
+        "listSize": 3,
+        "allRoute": "#/h/",
+        "allKind": "H",
+        "firstRoute": "#/h/Claude%20%26%20%2F",
+        "modeRoute": "#/h/",
+        "sessionRoute": "#/s/a",
+        "sessionReturn": "#/h/Claude%20%26%20%2F",
+    }
+
+
 def test_whats_new_keyboard_ownership_and_focus_execute_in_shipped_javascript():
     node = shutil.which("node")
     if node is None:
@@ -559,7 +646,8 @@ function closeRange(){} function closeStartupWarning(){} function whatifShown(){
 function stepWhatif(){} function whatifFlip(){} function armWhatif(){} function openTheme(){}
 function renderPrices(){} function renderTrends(){} function stepTrend(){} function openPrices(){}
 function curScope(){return {}} function tabsFor(){return []} function openTrends(){} function openRange(){}
-function applyRange(){} function sidebarList(){return null} function focusOrder(){return []}
+function applyRange(){} function sidebarList(){return null}
+function focusOrder(){return BROWSE === 'harnesses' ? ['harnesses'] : []}
 function render(){} function clearMsub(){} function go(){} function distinctYears(){return []}
 function toggleWhatif(){} function setBrowse(){}
 """
@@ -581,11 +669,13 @@ RANGE.pick=true; result.rangeW=event('W'); RANGE.pick=false;
 WHATIF.open=true; result.whatifW=event('W'); WHATIF.open=false;
 const editable={matches(sel){return sel.includes('[contenteditable]')}};
 result.editableW=event('W',editable);
+BROWSE='harnesses'; FOCUS='months'; result.digit=event('1'); result.digitFocus=FOCUS;
 console.log(JSON.stringify({opened, tab:result.tab.prevented, tabFocus:result.tabFocus,
   shiftTab:result.shiftTab.prevented, shiftTabFocus:result.shiftTabFocus,
   nativeEnter:result.nativeEnter.prevented, swallowed:result.swallowed.prevented,
   themeW:result.themeW.prevented, rangeW:result.rangeW.prevented,
-  whatifW:result.whatifW.prevented, editableW:result.editableW.prevented}));
+  whatifW:result.whatifW.prevented, editableW:result.editableW.prevented,
+  digit:result.digit.prevented, digitFocus:result.digitFocus}));
 """
     )
     result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
@@ -603,6 +693,8 @@ console.log(JSON.stringify({opened, tab:result.tab.prevented, tabFocus:result.ta
         "rangeW": True,
         "whatifW": True,
         "editableW": False,
+        "digit": True,
+        "digitFocus": "harnesses",
     }
 
 
@@ -1239,7 +1331,7 @@ def test_web_a_session_opened_from_a_drill_steps_back_into_it():
     # keeps it: test_month_models_tab_drills_into_sessions_using_a_model).
     js = _js_source()
     assert "onRow: r => { openSession(r.id); }" in js
-    assert "RETURN = MSUB ? { from: location.hash, to, msub: MSUB, tab: TAB } : null;" in js
+    assert "RETURN = (MSUB || kind === 'h' || kind === 'H')" in js
     # Restored inside resetScopeState, so the browser's Back button returns through the
     # same check as Esc; the offer is dropped as soon as we are anywhere else.
     assert "const back = !!RETURN && location.hash === RETURN.from;" in js
@@ -1253,9 +1345,9 @@ def test_web_a_session_opened_from_a_drill_steps_back_into_it():
     assert "trends: { ...TRENDS, open: true, drillTab: 'Sessions' }" in js
     assert "from: location.hash, to, msub: MSUB, tab: TAB" in js
     assert "if (back && RETURN.trends) TRENDS = RETURN.trends;" in js
-    # The Overview's Top sessions is NOT drill-scoped, so it keeps the plain navigation.
+    # Top sessions preserves box scopes just like the full Sessions table.
     top = js.split("function topSessionsTable(", 1)[1].split("\nfunction ", 1)[0]
-    assert "go('s', r.id)" in top
+    assert "openSession(r.id)" in top
 
 
 def test_web_overview_closes_with_the_models_table():
@@ -1715,6 +1807,7 @@ let RANGE, W = [], ALL_W = [], EXPANDED = new Set();
 function render() {}
 function closeRange() {}
 function filterRange(rows) { return rows; }
+function curScope() { return {kind: location.hash.split('/')[1] || 'all'}; }
 """
             + functions
             + """

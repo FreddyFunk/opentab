@@ -1740,11 +1740,13 @@ def test_projects_drill_keeps_the_selected_project():
     assert app.selected_project_summary.directory == "/tmp/cheap"
 
 
-def test_p_and_t_switch_browse_modes_directly():
+def test_browse_mode_keys_switch_directly():
     app = app_with([workflow("a", "2026-06-01 12:00:00")])
 
     assert app.handle_key(None, ord("p"))
     assert app.browse_mode == "projects"
+    assert app.handle_key(None, ord("u"))
+    assert app.browse_mode == "harnesses"
     assert app.handle_key(None, ord("p"))
     assert app.browse_mode == "projects"
     assert app.handle_key(None, ord("t"))
@@ -2836,7 +2838,150 @@ def test_machine_column_shows_only_in_the_fleet_view():
     assert "Machine" not in plain.session_header_text(False, 0)
 
 
-# --- Machines browse mode (the t/p/m strip) -----------------------------------
+# --- Harnesses browse mode (the t/p/u/m strip) --------------------------------
+
+
+def _harness_app():
+    expensive = workflow(
+        "open", "2026-06-01 10:00:00", cost=9.0, tokens=900, directory="/work/open"
+    )
+    cheap = workflow(
+        "claude", "2026-06-02 10:00:00", cost=2.0, tokens=200, directory="/work/claude"
+    )
+    expensive.source = "OpenCode"
+    cheap.source = "Claude Code"
+    app = app_with([expensive, cheap])
+    app.store.combined = True
+    return app
+
+
+def test_harnesses_include_a_synthetic_total_and_scope_real_rows():
+    app = _harness_app()
+    app.set_browse_mode("harnesses")
+
+    total, *rows = app.harnesses
+    assert total.aggregate and total.name == ot.ALL_HARNESSES
+    assert total.workflows == 2 and total.cost == 11.0
+    assert [row.name for row in rows] == ["OpenCode", "Claude Code"]
+    app.harness_index = 2
+    assert {w.id for w in app.current_sessions()} == {"claude"}
+
+
+def test_a_real_harness_named_all_harnesses_does_not_collide_with_the_total():
+    aggregate_name = workflow("real", "2026-06-01 10:00:00", cost=3.0)
+    other = workflow("other", "2026-06-02 10:00:00", cost=1.0)
+    aggregate_name.source = ot.ALL_HARNESSES
+    other.source = "OpenCode"
+    app = app_with([aggregate_name, other])
+    app.set_browse_mode("harnesses")
+
+    synthetic = app.harnesses[0]
+    real = next(row for row in app.harnesses[1:] if row.name == ot.ALL_HARNESSES)
+    assert synthetic.aggregate and not real.aggregate
+    assert {w.id for w in app.harness_scope(synthetic)} == {"real", "other"}
+    assert {w.id for w in app.harness_scope(real)} == {"real"}
+    app.harness_index = app.harnesses.index(real)
+    anchor = app.selection_anchor()
+    app.harness_index = 0
+    app.restore_selection(anchor)
+    assert app.selected_harness_summary is not None
+    assert not app.selected_harness_summary.aggregate
+
+
+def test_harnesses_honor_range_machine_bookmark_and_ignored_rules():
+    old = workflow("old", "2026-05-01 10:00:00", directory="/work/old")
+    kept = workflow("kept", "2026-06-01 10:00:00", directory="/work/kept")
+    ignored = workflow("ignored", "2026-06-02 10:00:00", directory="/work/ignored")
+    old.source, kept.source, ignored.source = "Old", "OpenCode", "Claude Code"
+    app = fleet_app({"laptop": [old], "server": [kept, ignored]})
+    app.ignored_projects = {"/work/ignored"}
+    app.bookmarks = {"kept", "ignored"}
+    app.show_bookmarks_only = True
+    app.select_machine_filter("server")
+    app.set_range_from_text("2026-06")
+    app.set_browse_mode("harnesses")
+
+    assert [row.name for row in app.harnesses] == [ot.ALL_HARNESSES, "OpenCode"]
+    assert {w.id for w in app.current_sessions()} == {"kept"}
+    app.show_ignored_projects = True
+    assert {row.name for row in app.harnesses[1:]} == {"OpenCode", "Claude Code"}
+    assert {w.id for w in app.current_sessions()} == {"kept", "ignored"}
+
+
+def test_harnesses_sort_move_and_clear_old_scope_drills():
+    app = _harness_app()
+    app.set_browse_mode("harnesses")
+    app.harness_sort_by = "harness"
+    assert [row.name for row in app.harnesses[1:]] == ["Claude Code", "OpenCode"]
+    app.move(1)
+    assert app.harness_index == 1
+    app.drill_in()
+    app.zoom_model = "stale"
+    app._apply_click(("harness", 2), drill=False)
+    assert app.harness_index == 2 and app.zoom_model is None
+
+
+def test_detail_search_does_not_change_the_selected_harness():
+    app = _harness_app()
+    app.set_browse_mode("harnesses")
+    app.harness_index = 2
+    app.drill_in()
+    app.tab = app.current_tabs().index("Sessions")
+    app.query = "claude"
+    app._filter_edited()
+    assert app.selected_harness_summary.name == "Claude Code"
+    assert [w.id for w in app.current_sessions()] == ["claude"]
+    app.handle_key(None, ord("x"))
+    assert app.selected_harness_summary.name == "Claude Code"
+
+    app.tab = app.current_tabs().index("Models")
+    app.query = "opus"
+    app._filter_edited()
+    assert app.selected_harness_summary.name == "Claude Code"
+
+
+def test_harness_mode_tabs_have_no_redundant_harnesses_tab():
+    app = _harness_app()
+    app.set_browse_mode("harnesses")
+    assert app.current_tabs() == ("Overview", "Models", "Projects", "Sessions")
+
+    fleet = fleet_app(
+        {
+            "laptop": [workflow("a", "2026-06-01 10:00:00")],
+            "server": [workflow("b", "2026-06-02 10:00:00")],
+        }
+    )
+    fleet.set_browse_mode("harnesses")
+    assert fleet.current_tabs() == ("Overview", "Machines", "Models", "Projects", "Sessions")
+
+
+def test_harness_sidebar_selection_never_reloads_the_store():
+    class CountingStore(FakeStore):
+        combined = True
+
+        def __init__(self, workflows):
+            super().__init__(workflows)
+            self.calls = 0
+
+        def workflows(self):
+            self.calls += 1
+            return super().workflows()
+
+    first = workflow("a", "2026-06-01 10:00:00")
+    second = workflow("b", "2026-06-02 10:00:00")
+    first.source, second.source = "OpenCode", "Claude Code"
+    store = CountingStore([first, second])
+    args = type("Args", (), {"since": None, "until": None, "days": None})()
+    app = ot.App(store, args)
+    calls = store.calls
+
+    app.handle_key(None, ord("u"))
+    app.move(1)
+    app.drill_in()
+    assert store.calls == calls
+
+
+# --- Machines browse mode (the t/p/u/m strip) ---------------------------------
 
 
 def _fleet():
@@ -3610,7 +3755,7 @@ def test_machines_mode_refresh_drops_a_project_drill_like_source_and_model():
 
 
 def test_mode_tab_list_always_offers_machines():
-    modes = ["time", "projects", "machines"]
+    modes = ["time", "projects", "harnesses", "machines"]
     assert [
         m for _l, m in app_with([workflow("a", "2026-05-01 10:00:00")]).mode_tab_list()
     ] == modes
@@ -3620,7 +3765,9 @@ def test_mode_tab_list_always_offers_machines():
 def test_mode_tab_click_switches_browse_mode():
     app = _fleet()
     # ("modetab", index) -> the mode at that index in mode_tab_list.
-    app._apply_click(("modetab", 2), drill=False)  # Machines
+    app._apply_click(("modetab", 2), drill=False)  # Harnesses
+    assert app.browse_mode == "harnesses"
+    app._apply_click(("modetab", 3), drill=False)  # Machines
     assert app.browse_mode == "machines"
     app._apply_click(("modetab", 0), drill=False)  # Time
     assert app.browse_mode == "time"
@@ -4398,7 +4545,7 @@ def test_a_box_ranks_models_over_exactly_the_sessions_its_enter_opens():
 def test_the_browse_mode_table_is_the_only_place_modes_are_enumerated():
     app = app_with([workflow("a", "2026-06-01 12:00:00")])
     modes = app.BROWSE_MODES
-    assert [m.key for m in modes] == ["time", "projects", "machines"]
+    assert [m.key for m in modes] == ["time", "projects", "harnesses", "machines"]
     assert app.BROWSE_MODE_KEYS == tuple(m.key for m in modes)
     assert app.mode_tab_list() == [(m.label, m.key) for m in modes]
     # Each mode's keymap action really exists in the `main` context, so the footer and
@@ -4417,7 +4564,7 @@ def test_the_browse_mode_table_is_the_only_place_modes_are_enumerated():
 
 def test_an_unknown_saved_browse_mode_falls_back_instead_of_raising():
     app = app_with([workflow("a", "2026-06-01 12:00:00")])
-    app.browse_mode = "harnesses"  # a mode from a future version, or a typo
+    app.browse_mode = "providers"  # a mode from a future version, or a typo
     assert app.browse_mode_spec is app.BROWSE_MODES[0]
     assert app.flat_browse_mode is False
 
@@ -4430,9 +4577,10 @@ def test_the_selection_anchor_is_read_by_name_and_still_indexes():
     assert anchor.month == "2026-06"
     # Still a tuple: everything that already unpacked or indexed it is unaffected.
     assert tuple(anchor)[5] == anchor.session
-    assert len(anchor) == 6
-    year, month, day, project, machine, session = anchor
+    assert len(anchor) == 7
+    year, month, day, project, machine, session, harness = anchor
     assert (month, project, session) == ("2026-06", "/x", "a")
+    assert harness is None
 
 
 def test_both_session_lists_scope_from_the_one_mode_scope():
@@ -4501,3 +4649,15 @@ def test_dollar_leaves_the_projects_sidebar_selection_to_the_anchor():
     after = app.selected_project_summary
     assert before is not None and after is not None
     assert after.directory == before.directory
+
+
+def test_dollar_reanchors_the_harness_sidebar_after_costs_reorder():
+    app = _zoom_reprice_app()
+    app.set_browse_mode("harnesses")
+    app.harness_index = next(i for i, row in enumerate(app.harnesses) if row.name == "B")
+
+    app.toggle_api_prices()
+
+    assert app.selected_harness_summary is not None
+    assert app.selected_harness_summary.name == "B"
+    assert [row.name for row in app.harnesses[1:]] == ["A", "B"]

@@ -602,7 +602,9 @@ function clearMsub() {
 let RETURN = null;
 function openSession(id) {
   const to = '#/s/' + encodeURIComponent(id);
-  RETURN = MSUB ? { from: location.hash, to, msub: MSUB, tab: TAB } : null;
+  const kind = curScope().kind;
+  RETURN = (MSUB || kind === 'h' || kind === 'H')
+    ? { from: location.hash, to, msub: MSUB, tab: TAB } : null;
   location.hash = to;
 }
 // Navigation and range changes invalidate all state selected within the old scope -- the
@@ -622,6 +624,7 @@ function msubFilter(ws) {
   if (!MSUB) return ws;
   // Filter against the same normalized key that sourceRows groups by.
   if (MSUB.dim === 'source') return ws.filter(w => (w.source || META.source) === MSUB.value);
+  if (MSUB.dim === 'machine') return ws.filter(w => (w.machine || 'unknown') === MSUB.value);
   if (MSUB.dim === 'project') return ws.filter(w => w.project === MSUB.value);
   if (MSUB.dim === 'model') return ws.filter(w => (DATA.models[w.id] || []).some(x => x.model === MSUB.value));
   return ws;
@@ -1079,6 +1082,7 @@ function curScope() {
   if (kind === 'm' && arg) return { kind: 'm', month: arg, year: arg.slice(0, 4) };
   if (kind === 'd' && arg) return { kind: 'd', day: arg, month: arg.slice(0, 7), year: arg.slice(0, 4) };
   if (kind === 'p' && arg) return { kind: 'p', project: arg };
+  if (kind === 'h') return arg ? { kind: 'h', source: arg } : { kind: 'H' };
   if (kind === 'M' && arg) return { kind: 'M', machine: arg };
   if (kind === 's' && arg) {
     const w = ALL_W.find(x => x.id === arg);
@@ -1123,11 +1127,14 @@ const scopeYear = sc => sc.year || null;
 // Render directly when mode changes do not change the hash.
 function setBrowse(mode) {
   BROWSE = mode;
-  FOCUS = mode === 'projects' ? 'projects' : mode === 'machines' ? 'machines' : 'months';
+  FOCUS = mode === 'projects' ? 'projects' : mode === 'harnesses' ? 'harnesses'
+    : mode === 'machines' ? 'machines' : 'months';
   const k = curScope().kind;
   const forced = (k === 'y' || k === 'm' || k === 'd') ? 'time'
-    : k === 'p' ? 'projects' : k === 'M' ? 'machines' : null;
-  if (forced && forced !== mode) go('', '');
+    : k === 'p' ? 'projects' : (k === 'h' || k === 'H') ? 'harnesses'
+    : k === 'M' ? 'machines' : null;
+  if (mode === 'harnesses' && forced !== 'harnesses') go('h', '');
+  else if (forced && forced !== mode) go('', '');
   else render(false);
 }
 function scopeWorkflows(sc) {
@@ -1135,6 +1142,7 @@ function scopeWorkflows(sc) {
   if (sc.kind === 'm') return W.filter(w => w.date.startsWith(sc.month));
   if (sc.kind === 'd') return W.filter(w => w.date.startsWith(sc.day));
   if (sc.kind === 'p') return W.filter(w => w.project === sc.project);
+  if (sc.kind === 'h') return W.filter(w => (w.source || META.source) === sc.source);
   if (sc.kind === 'M') return W.filter(w => (w.machine || 'unknown') === sc.machine);
   if (sc.kind === 's') return sc.session ? [sc.session] : [];
   return W;
@@ -1153,6 +1161,9 @@ function tabsFor(sc) {
     return t;
   }
   if (MSUB && MSUB.dim === 'model') return ['Economics', 'Sessions'];
+  if (sc.kind === 'h' || sc.kind === 'H') {
+    return ['Overview'].concat(META.machines ? ['Machines'] : [], ['Models', 'Projects', 'Sessions']);
+  }
   const base = { all: ['Overview', 'Models', 'Projects', 'Sessions'],
     y: ['Overview', 'Models', 'Projects', 'Sessions'],
     m: ['Overview', 'Models', 'Projects', 'Sessions'],
@@ -1183,9 +1194,21 @@ function renderSidebar(sc) {
   const side = document.getElementById('side');
   side.textContent = '';
   side.appendChild(h('div', { class: 'mode' },
-    h('button', { class: BROWSE === 'time' ? 'on' : null, onclick: () => setBrowse('time') }, 'time'),
-    h('button', { class: BROWSE === 'projects' ? 'on' : null, onclick: () => setBrowse('projects') }, 'projects'),
-    h('button', { class: BROWSE === 'machines' ? 'on' : null, onclick: () => setBrowse('machines') }, 'machines')));
+    h('button', { class: BROWSE === 'time' ? 'on' : null, onclick: () => setBrowse('time') }, 'Time'),
+    h('button', { class: BROWSE === 'projects' ? 'on' : null, onclick: () => setBrowse('projects') }, 'Projects'),
+    h('button', { class: BROWSE === 'harnesses' ? 'on' : null, onclick: () => setBrowse('harnesses') }, 'Harnesses'),
+    h('button', { class: BROWSE === 'machines' ? 'on' : null, onclick: () => setBrowse('machines') }, 'Machines')));
+  if (BROWSE === 'harnesses') {
+    const rows = sourceRows(W).sort((a, b) => b.cost - a.cost || a.source.localeCompare(b.source));
+    const peak = Math.max(...rows.map(r => r.cost), 0);
+    side.appendChild(sidePane('Harnesses', 'harnesses', [
+      sideRow(sc.kind === 'H', () => go('h', ''), '∑ all harnesses', String(W.length), sum(W, cost), sum(W, cost)),
+      rows.map(r => sideRow(sc.kind === 'h' && sc.source === r.source, () => go('h', r.source),
+        r.source, String(r.sessions), r.cost, peak))]));
+    if (!META.combined) side.appendChild(h('div', { class: 'hint' },
+      'This report contains loaded sources only. Run with --harness all to compare harnesses.'));
+    return;
+  }
   if (BROWSE === 'machines') {
     const rows = machineRows(W).sort((a, b) =>
       ((MMETA[b.machine] || {}).live ? 1 : 0) - ((MMETA[a.machine] || {}).live ? 1 : 0) || b.cost - a.cost);
@@ -1529,7 +1552,7 @@ function sessionsTable(id, ws, model) {
 }
 function topSessionsTable(id, ws, n) {
   return table(id, sessionCols(), ws, { defaultSort: { key: 'cost', desc: true }, collapse: n,
-    onRow: r => { go('s', r.id); } });
+    onRow: r => { openSession(r.id); } });
 }
 function sourcesTable(id, ws, onRow) {
   const rows = sourceRows(ws);
@@ -1541,7 +1564,7 @@ function sourcesTable(id, ws, onRow) {
     { key: 'tokens', label: 'Tokens', align: 'r', fmt: r => hTok(r.tokens) },
   ], rows, { defaultSort: { key: 'cost', desc: true }, onRow: onRow || null });
 }
-function machinesTable(id, ws) {
+function machinesTable(id, ws, onRow) {
   const rows = machineRows(ws);
   const peak = Math.max(...rows.map(r => r.cost), 0);
   return table(id, [
@@ -1549,7 +1572,8 @@ function machinesTable(id, ws) {
     { key: 'sessions', label: 'Sessions', align: 'r' },
     { key: 'cost', label: 'Cost', align: 'r', fmt: r => barCell(r.cost, peak) },
     { key: 'tokens', label: 'Tokens', align: 'r', fmt: r => hTok(r.tokens) },
-  ], rows, { defaultSort: { key: 'cost', desc: true }, onRow: r => { go('M', r.machine); } });
+  ], rows, { defaultSort: { key: 'cost', desc: true },
+    onRow: onRow === undefined ? (r => { go('M', r.machine); }) : onRow });
 }
 
 // Shared by Turns and Context; thresholds mirror util.CONTEXT_COMPACT_*.
@@ -2196,6 +2220,8 @@ function scopeLabel(sc) {
   if (sc.kind === 'm') return monthLabel(sc.month);
   if (sc.kind === 'd') return sc.day;
   if (sc.kind === 'p') return projName(sc.project);
+  if (sc.kind === 'h') return sc.source;
+  if (sc.kind === 'H') return 'all harnesses';
   if (sc.kind === 'M') return sc.machine;
   if (sc.kind === 's') return sessionLabel(sc);
   return 'all time';
@@ -2250,8 +2276,11 @@ function renderOverview(root, sc, ws) {
   }
   const econ = tokenEconomicsPane(ws, scopeLabel(sc));
   if (econ) root.appendChild(econ);
-  if (sc.kind !== 'p')
-    root.appendChild(pane('Top projects', projectsTable('t-ov-projects', ws, 8, sc.kind === 'M' ? null : undefined)));
+  if (sc.kind !== 'p') {
+    const projectDrill = (sc.kind === 'h' || sc.kind === 'H') ? (r => setMsub('project', r.project))
+      : sc.kind === 'M' ? null : undefined;
+    root.appendChild(pane('Top projects', projectsTable('t-ov-projects', ws, 8, projectDrill)));
+  }
   root.appendChild(pane('Top sessions', topSessionsTable('t-ov-sessions', ws, 8)));
   root.appendChild(pane(sc.kind === 'd' ? 'Model mix' : 'Top models', modelsTable('t-ov-models', modelAgg(ws), 8)));
 }
@@ -2278,9 +2307,8 @@ function renderDetail(sc, ws) {
   const root = document.getElementById('view');
   root.querySelectorAll('.tool-map').forEach(el => el._resizeObserver?.disconnect());
   root.textContent = '';
-  // Model drills stay in place everywhere; project/harness drills do so only inside a
-  // machine scope, matching the TUI's partition axes.
-  const box = sc.kind === 'M';
+  // Model drills stay in place everywhere; partition axes drill inside another box.
+  const box = sc.kind === 'M' || sc.kind === 'h' || sc.kind === 'H';
   if (TAB === 'Economics') renderModelEconomics(root, ws);
   else if (TAB === 'Overview') renderOverview(root, sc, ws);
   else if (TAB === 'Models') {
@@ -2294,7 +2322,9 @@ function renderDetail(sc, ws) {
       msubFilter(ws), MSUB && MSUB.dim === 'model' ? MSUB.value : null)));
   else if (TAB === 'Harnesses') root.appendChild(pane('Harnesses · ' + scopeLabel(sc),
     sourcesTable('t-tab-sources', ws, box ? (r => setMsub('source', r.source)) : null)));
-  else if (TAB === 'Machines') root.appendChild(pane('Machines · ' + scopeLabel(sc), machinesTable('t-tab-machines', ws)));
+  else if (TAB === 'Machines') root.appendChild(pane('Machines · ' + scopeLabel(sc),
+    machinesTable('t-tab-machines', ws, (sc.kind === 'h' || sc.kind === 'H')
+      ? (r => setMsub('machine', r.machine)) : undefined)));
   else if (TAB === 'Subagents') {
     // Solo sessions expose what-if only in Overview; missing model rows suppress partial comparisons.
     const nodes = DATA.nodes[sc.id];
@@ -2342,6 +2372,8 @@ function renderCrumbs(sc) {
   el.textContent = '';
   const items = [['all time', sc.kind === 'all' ? null : '#/']];
   if (sc.kind === 'p') items.push([projName(sc.project), null]);
+  if (sc.kind === 'H') items.push(['harnesses', null]);
+  if (sc.kind === 'h') items.push(['harnesses', '#/h/'], [sc.source, null]);
   if (sc.kind === 'M') items.push(['machines', '#/'], [sc.machine, null]);
   if (sc.year && distinctYears(W).length > 1) items.push([sc.year, sc.kind === 'y' ? null : '#/y/' + sc.year]);
   if (sc.month && sc.kind !== 'm') items.push([monthLabel(sc.month), '#/m/' + sc.month]);
@@ -2355,7 +2387,7 @@ function renderCrumbs(sc) {
   });
   // The chip is the browser's explicit exit from an in-place drill; Esc pops it first.
   if (MSUB) {
-    const lab = { source: 'harness', project: 'project', model: 'model' }[MSUB.dim];
+    const lab = { source: 'harness', machine: 'machine', project: 'project', model: 'model' }[MSUB.dim];
     const val = MSUB.dim === 'project' ? projName(MSUB.value) : MSUB.value;
     el.appendChild(h('span', { class: 'sep' }, '·'));
     el.appendChild(h('a', { href: '#', title: 'clear this drill',
@@ -2390,8 +2422,8 @@ function chrome() {
     onclick: () => fetch('/api/reload', { method: 'POST' }).then(() => location.reload()) }, '↻ refresh'));
   const hints = document.getElementById('hints');
   hints.textContent = '';
-  [['j/k', 'move'], ['Tab', 'panel'], ['h/l', 'tabs'], ['Esc', 'back'], ['$', 'what-if'], ['w', 'what-if model'],
-   ['t/p/m', 'time/proj/machines'], ['T', 'trends'], ['P', 'prices'], ['C', 'theme'], ['W', "what's new"], ['R', 'range']]
+   [['j/k', 'move'], ['Tab', 'panel'], ['h/l', 'tabs'], ['Esc', 'back'], ['$', 'what-if'], ['w', 'what-if model'],
+    ['t/p/u/m', 'time/proj/harness/machines'], ['T', 'trends'], ['P', 'prices'], ['C', 'theme'], ['W', "what's new"], ['R', 'range']]
     .forEach(([k, lbl]) => hints.append(h('kbd', null, k), ' ' + lbl + '   '));
   document.getElementById('stamp').textContent =
     'generated by OpenTab v' + META.version + ' · ' + META.range + ' · ' + META.generated
@@ -2851,10 +2883,16 @@ function closeRange() { RANGE.pick = false; renderRange(); }
 
 function focusOrder() {
   if (BROWSE === 'projects') return ['projects'];
+  if (BROWSE === 'harnesses') return ['harnesses'];
   if (BROWSE === 'machines') return ['machines'];
   return distinctYears(W).length > 1 ? ['years', 'months', 'days'] : ['months', 'days'];
 }
 function sidebarList(sc) {
+  if (BROWSE === 'harnesses') {
+    const rows = sourceRows(W).sort((a, b) => b.cost - a.cost || a.source.localeCompare(b.source));
+    return { rows: [{ go: () => go('h', '') }, ...rows.map(r => ({ go: () => go('h', r.source) }))],
+      index: sc.kind === 'h' ? 1 + rows.findIndex(r => r.source === sc.source) : 0 };
+  }
   if (BROWSE === 'machines') {
     const rows = machineRows(W).sort((a, b) =>
       ((MMETA[b.machine] || {}).live ? 1 : 0) - ((MMETA[a.machine] || {}).live ? 1 : 0) || b.cost - a.cost);
@@ -2974,6 +3012,9 @@ document.addEventListener('keydown', e => {
     openRange();
   } else if (e.key === 'a') {
     applyRange({ kind: 'all', label: 'all time' });
+  } else if (/^[1-9]$/.test(e.key)) {
+    const order = focusOrder(), index = Number(e.key) - 1;
+    if (index < order.length) { FOCUS = order[index]; render(false); e.preventDefault(); }
   } else if (e.key === 'j' || e.key === 'ArrowDown' || e.key === 'k' || e.key === 'ArrowUp') {
     const list = sidebarList(sc);
     if (!list || !list.rows.length) return;
@@ -2981,7 +3022,7 @@ document.addEventListener('keydown', e => {
     const next = Math.max(0, Math.min(list.rows.length - 1, list.index + step));
     if (next !== list.index) list.rows[next].go();
     e.preventDefault();
-  } else if (e.key === 'Tab' && BROWSE === 'time') {
+  } else if (e.key === 'Tab') {
     const order = focusOrder();
     const cur = order.indexOf(FOCUS);
     FOCUS = order[((cur < 0 ? 0 : cur) + (e.shiftKey ? -1 : 1) + order.length) % order.length];
@@ -3002,6 +3043,8 @@ document.addEventListener('keydown', e => {
     else if (sc.kind === 's') sc.day ? go('d', sc.day) : go('', '');
     else if (sc.kind === 'd') go('m', sc.month);
     else if (sc.kind === 'm') multiYear ? go('y', sc.year) : go('', '');
+    else if (sc.kind === 'h') go('h', '');
+    else if (sc.kind === 'H') go('', '');
     else if (sc.kind === 'y' || sc.kind === 'p' || sc.kind === 'M') go('', '');
   } else if (e.key === '$' && !META.demo) {
     MODE = MODE === 'api' ? 'real' : 'api';
@@ -3013,6 +3056,8 @@ document.addEventListener('keydown', e => {
     setBrowse('projects');
   } else if (e.key === 't' && BROWSE !== 'time') {
     setBrowse('time');
+  } else if (e.key === 'u' && BROWSE !== 'harnesses') {
+    setBrowse('harnesses');
   } else if (e.key === 'm' && BROWSE !== 'machines') {
     setBrowse('machines');
   }
@@ -3021,8 +3066,10 @@ document.addEventListener('keydown', e => {
 function render(scrollTop = true) {
   const sc = curScope();
   if (sc.kind === 'p') BROWSE = 'projects';
+  else if (sc.kind === 'h' || sc.kind === 'H') BROWSE = 'harnesses';
   else if (sc.kind === 'M') BROWSE = 'machines';
   else if (sc.kind === 'y' || sc.kind === 'm' || sc.kind === 'd') BROWSE = 'time';
+  else if (sc.kind === 'all' && BROWSE === 'harnesses') BROWSE = 'time';
   // Revalidate transient focus after mode or dataset changes.
   const order = focusOrder();
   if (!order.includes(FOCUS)) FOCUS = order[0];

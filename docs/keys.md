@@ -37,7 +37,7 @@ compaction.
 
 | Key | Action |
 |-----|--------|
-| `p` / `t` / `m` | Switch to the Projects / Time / Machines browse mode — Machines opens on `∑ all machines` (the whole fleet as one scope), then one row per box (just this one until you [pull](machines.md) another) |
+| `t` / `p` / `u` / `m` | Switch to Time / Projects / Harnesses / Machines browse mode. Harnesses opens on `∑ All harnesses`, then one row per loaded harness; Machines opens on `∑ all machines` (the whole fleet as one scope), then one row per box (just this one until you [pull](machines.md) another) |
 | `Tab` / `Shift-Tab` | Cycle focus Years → Months → Days (Time mode); Shift-Tab at the top steps back out |
 | `1` / `2` / `3` / `0` | Jump straight to a panel — **each panel wears its number in its title**, lazygit-style: the sidebar top to bottom (`[1] Years`, `[2] Months`, `[3] Days`; in Projects mode `[1] Projects`) and `[0]` the detail pane on the right, what `Enter` drills into. A digit jumps from anywhere: it steps out of a zoomed detail or an open session to get there |
 | `Enter` | Drill into the selection; on Turns, open a prompt, then its selected turn. Inside a turn, expand / collapse the `▸` tool's output (at the top of the viewport, or the next below it) |
@@ -80,6 +80,18 @@ the harness records cumulative-total deltas rather than per-request prompts
 (Codex), neither tab marks anything.
 
 ## Scope & filter
+
+**Harnesses** (`u`) compares the data already loaded, within the active date range
+and machine filter. Its sidebar shows cost, tokens and session counts; `s` or a
+column-header click sorts the harness rows while **All harnesses** stays first.
+Enter opens Overview, Models, Projects and Sessions, plus Machines for a fleet.
+Project, machine and model drills keep the selected harness scope. Detail search
+does not change the selected harness, and `e` exports the focused list.
+
+This is different from `H`: the harness picker changes which sources are loaded
+(or filters the loaded fleet by harness). Selecting a sidebar row never loads a
+different backend. If only one source is loaded, use `H` to choose All when other
+harnesses are detected; the browse mode remains available with a single source.
 
 | Key | Action |
 |-----|--------|

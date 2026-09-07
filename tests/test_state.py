@@ -554,6 +554,33 @@ def test_last_activity_sort_is_persisted_in_state():
     assert restored.project_sort_by == "last_activity"
 
 
+def test_harness_sort_is_validated_and_persisted_in_state():
+    app = app_with([workflow("a", "2026-06-01 12:00:00")])
+    ot.apply_state(
+        app,
+        app.args,
+        {"harness_sort_by": "bogus", "harness_sort_reverse": True},
+    )
+    assert app.harness_sort_by == "cost" and app.harness_sort_reverse
+
+    app.harness_sort_by = "harness"
+    app.harness_sort_reverse = True
+    old_xdg = os.environ.get("XDG_STATE_HOME")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["XDG_STATE_HOME"] = tmp
+        try:
+            ot.save_state(app)
+            restored = app_with([workflow("a", "2026-06-01 12:00:00")])
+            ot.apply_state(restored, restored.args, ot.load_state())
+        finally:
+            if old_xdg is None:
+                os.environ.pop("XDG_STATE_HOME", None)
+            else:
+                os.environ["XDG_STATE_HOME"] = old_xdg
+    assert restored.harness_sort_by == "harness"
+    assert restored.harness_sort_reverse is True
+
+
 def test_machines_browse_mode_is_restored_fleet_or_not():
     from tests._support import fleet_app
 
@@ -803,5 +830,5 @@ def test_the_restored_browse_mode_whitelist_follows_the_mode_table():
         assert fresh.browse_mode == mode.key
     # Anything else leaves __init__'s default standing rather than being adopted.
     fresh = app_with([workflow("a", "2026-06-01 12:00:00")])
-    ot.apply_state(fresh, fresh.args, {"browse_mode": "harnesses"})
+    ot.apply_state(fresh, fresh.args, {"browse_mode": "providers"})
     assert fresh.browse_mode == "time"
