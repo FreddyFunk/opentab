@@ -614,6 +614,7 @@ function resetScopeState() {
   const back = !!RETURN && location.hash === RETURN.from;
   MSUB = back ? RETURN.msub : null;
   if (back) TAB = RETURN.tab;
+  if (back && RETURN.trends) TRENDS = RETURN.trends;
   // The offer stands exactly as long as we are in the session it was made from.
   if (back || !RETURN || location.hash !== RETURN.to) RETURN = null;
 }
@@ -634,7 +635,7 @@ const VIEW = { calYear: null };
 let TURN_DRILL = null;
 let EXTRAS = { id: null, loading: false, turns: [], tools: [], context: null, expiries: [] };
 const TREND_TABS = ['Daily', 'Weekly', 'Monthly', 'Calendar', 'Models', 'Providers', 'Projects', 'Harnesses'].concat(META.machines ? ['Machines'] : []);
-let TRENDS = { open: false, tab: 'Daily', monthIdx: 0, weekIdx: 0, yearIdx: 0, drill: null, sort: 'cost', desc: true };
+let TRENDS = { open: false, tab: 'Daily', monthIdx: 0, weekIdx: 0, yearIdx: 0, drill: null, drillTab: null, sort: 'cost', desc: true };
 const PRICE_VIEWS = [['flat', 'flat list'], ['family', 'by vendor'], ['provider', 'by provider'], ['all', 'models.dev']];
 let PRICES = { open: false, view: 'flat', sort: 'eff', desc: false, q: '' };
 // `w` affects only a session's Overview/tree and must remain independent of `$`.
@@ -1330,10 +1331,13 @@ function tokenEconomicsPane(ws, label, model) {
     notes.map(n => h('div', { class: 'hint' }, n)));
 }
 
-function renderModelEconomics(root, ws) {
-  const model = MSUB && MSUB.dim === 'model' ? MSUB.value : null;
+function renderModelEconomics(root, ws, selectedModel) {
+  const model = selectedModel || (MSUB && MSUB.dim === 'model' ? MSUB.value : null);
   if (!model) return;
-  const rows = msubFilter(ws), usage = modelScopeUsage(rows, model);
+  const rows = selectedModel
+    ? ws.filter(w => (DATA.models[w.id] || []).some(r => r.model === model))
+    : msubFilter(ws);
+  const usage = modelScopeUsage(rows, model);
   const local = WI_LOCAL.has(model);
   root.appendChild(pane('Model · ' + model, tiles([
     ['sessions', rows.length.toLocaleString('en-US')],
@@ -2527,18 +2531,41 @@ function trendDrillRows() {
 function trendDrill() {
   const { kind, key } = TRENDS.drill;
   const label = kind === 'project' ? shortPath(key) : key;
+  const model = kind === 'model';
+  const tab = model ? (TRENDS.drillTab || 'Economics') : 'Sessions';
+  const tabs = model ? h('div', { class: 'tr-tabs' }, ['Economics', 'Sessions'].map(t =>
+    h('button', { class: t === tab ? 'on' : null,
+      onclick: () => { TRENDS.drillTab = t; renderTrends(); } }, t))) : null;
+  const nav = back => h('div', { class: 'tr-nav' }, back, tabs,
+    h('span', { class: 'lbl' }, tab + ' · ' + label));
+  const back = h('button', { class: 'hbtn', onclick: () => { TRENDS.drill = null; TRENDS.drillTab = null; renderTrends(); } }, '← back');
+  if (model && tab === 'Economics') {
+    const body = h('div');
+    renderModelEconomics(body, W, key);
+    return h('div', null, nav(back), body);
+  }
   const rows = trendDrillRows();
-  const back = h('button', { class: 'hbtn', onclick: () => { TRENDS.drill = null; renderTrends(); } }, '← back');
-  if (!rows.length) return h('div', null, h('div', { class: 'tr-nav' }, back), h('div', { class: 'hint' }, 'No sessions used ' + label + ' in the active range.'));
+  if (!rows.length) return h('div', null, nav(back), h('div', { class: 'hint' }, 'No sessions used ' + label + ' in the active range.'));
   const total = rows.reduce((a, r) => a + r.cost, 0);
   const head = h('tr', null, h('th', { class: 'l' }, 'Started'), h('th', null, 'Cost'), h('th', null, 'Tokens'), h('th', { class: 'l' }, 'Title'));
-  const body = rows.map(r => h('tr', { class: 'rowlink', onclick: () => { closeTrends(); go('s', r.id); } },
+  const body = rows.map(r => h('tr', { class: 'rowlink', onclick: () => {
+    if (model) openTrendSession(r.id); else { closeTrends(); go('s', r.id); }
+  } },
     h('td', { class: 'l mut' }, r.date.slice(0, 10)), h('td', null, moneyCell(r.cost)),
     h('td', { class: 'mut' }, hTok(r.tokens)), h('td', { class: 'l' }, r.title)));
   return h('div', null,
-    h('div', { class: 'tr-nav' }, back, h('span', { class: 'lbl' }, 'Sessions · ' + label),
+    nav(back),
+    h('div', { class: 'tr-nav' },
       h('span', { class: 'mut' }, rows.length + ' session(s) · ' + money(total) + ' · most spend first')),
     h('table', { class: 'rank' }, h('thead', null, head), h('tbody', null, body)));
+}
+function openTrendSession(id) {
+  const to = '#/s/' + encodeURIComponent(id);
+  if (location.hash === to) { closeTrends(); return; }
+  RETURN = { from: location.hash, to, msub: MSUB, tab: TAB,
+    trends: { ...TRENDS, open: true, drillTab: 'Sessions' } };
+  TRENDS.open = false;
+  location.hash = to;
 }
 function trendDaily() {
   const months = trendMonths();
@@ -2594,7 +2621,7 @@ function trendModels() {
     .filter(r => r.cost > 0).sort((a, b) => b.cost - a.cost);
   if (!rows.length) return h('div', { class: 'hint' }, 'No priced model spend in the active range.');
   return rankedBars(rows, { nameLabel: 'Model', nameFmt: r => modelCell(r.name),
-    onRow: r => { TRENDS.drill = { kind: 'model', key: r.name }; renderTrends(); },
+    onRow: r => { TRENDS.drill = { kind: 'model', key: r.name }; TRENDS.drillTab = 'Economics'; renderTrends(); },
     extra: [{ key: 'tokens', label: 'Tokens', get: r => hTok(r.tokens), cls: 'mut' }, { key: 'count', label: 'Msgs', get: r => String(r.runs), cls: 'mut' }] });
 }
 function trendProviders() {
@@ -2916,9 +2943,13 @@ document.addEventListener('keydown', e => {
   }
   if (TRENDS.open) {
     // Escape leaves an inner trend drill before closing the overlay.
-    if (e.key === 'Escape') { if (TRENDS.drill) { TRENDS.drill = null; renderTrends(); } else closeTrends(); e.preventDefault(); }
+    if (e.key === 'Escape') { if (TRENDS.drill) { TRENDS.drill = null; TRENDS.drillTab = null; renderTrends(); } else closeTrends(); e.preventDefault(); }
     else if (e.key === 'T') { closeTrends(); e.preventDefault(); }
     else if (e.key === 'h' || e.key === 'ArrowLeft' || e.key === 'l' || e.key === 'ArrowRight') {
+      if (TRENDS.drill && TRENDS.drill.kind === 'model') {
+        TRENDS.drillTab = TRENDS.drillTab === 'Sessions' ? 'Economics' : 'Sessions';
+        renderTrends(); e.preventDefault(); return;
+      }
       const i = TREND_TABS.indexOf(TRENDS.tab), step = (e.key === 'h' || e.key === 'ArrowLeft') ? -1 : 1;
       TRENDS.tab = TREND_TABS[(i + step + TREND_TABS.length) % TREND_TABS.length]; TRENDS.drill = null; renderTrends(); e.preventDefault();
     } else if (e.key === 'j' || e.key === 'ArrowDown' || e.key === 'k' || e.key === 'ArrowUp') {

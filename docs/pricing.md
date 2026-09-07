@@ -74,6 +74,10 @@ scope. Its Sessions tab shows **Model list** and **Model tok**, not whole-sessio
 totals. `$` does not change those model-attributed figures; see
 [model navigation](keys.md#drilling-a-model).
 
+Trends → Models also opens Economics / Sessions. Its economics card uses the
+selected model within the active Trends range, independent of the sidebar scope
+and `$`. The Trends session list retains its current-price-mode Cost column.
+
 ### Cache-write lifetimes
 
 Anthropic cache writes can buy five minutes or one hour of reuse. The recorded

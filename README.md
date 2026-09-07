@@ -97,8 +97,8 @@ share of the volume beside its share of the cost at API list rates: uncached inp
 output, reasoning, cache reads, and cache writes.
 
 See how much of your usage is cached, and which token types account for the money.
-Drill into a model within a month or project to see its own economics and the sessions
-that used it, ranked by that model's contribution.
+Drill into a model within a month or project, or in Trends over the active date range,
+to see its own economics and the sessions that used it, ranked by that model's contribution.
 
 ### See what filled the context window
 

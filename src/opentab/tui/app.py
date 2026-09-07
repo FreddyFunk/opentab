@@ -444,6 +444,8 @@ class App:
         self.trend_sort_reverse = False
         self.trend_drill: tuple[str, str] | None = None
         self.trend_drill_index = 0
+        self.trend_drill_tab = 0
+        self.trend_drill_scroll = 0
         self.turn_drill: int | None = None
         # A prompt ordinal is valid only for its owning session; validate at point of use.
         self._turn_drill_session: str | None = None
@@ -5036,6 +5038,8 @@ class App:
             self.trend_row_index = keys.index(key)
             self.trend_drill = (kind, key)
             self.trend_drill_index = row
+            self.trend_drill_tab = 1  # A session returns to Sessions, not Economics.
+            self.trend_drill_scroll = 0
             return
         key = ret[1]
         if tab == "Calendar":
@@ -6169,8 +6173,16 @@ class App:
         else:
             self.notify(f"no {noun} {cursor}", "error")
 
+    @property
+    def trend_model_drill(self) -> bool:
+        return self.trend_drill is not None and self.trend_drill[0] == "model"
+
+    @property
+    def trend_economics(self) -> bool:
+        return self.trend_model_drill and self.trend_drill_tab == 0
+
     def _open_trend_drill(self) -> None:
-        # Enter on a ranked row (Models/Providers/Sources): open its sessions list.
+        # Models open Economics/Sessions; other rankings open their sessions directly.
         current = self.trend_tabs[self.trend_tab % len(self.trend_tabs)]
         keys = self.trend_ranked_keys()
         if not keys:
@@ -6184,6 +6196,8 @@ class App:
         }[current]
         self.trend_drill = (kind, keys[max(0, min(self.trend_row_index, len(keys) - 1))])
         self.trend_drill_index = 0
+        self.trend_drill_tab = 0
+        self.trend_drill_scroll = 0
 
     def _trend_drill_key(self, key: int | str, stdscr: curses.window | None = None) -> bool:
         # A ranked row's sessions list: the scroll keys move the cursor, select opens
@@ -6191,6 +6205,25 @@ class App:
         # key is swallowed.
         n = len(self.trend_drill_sessions())
         act = self.keymap.action("trends.drill", key)
+        if self.trend_model_drill and act in ("tab_prev", "tab_next"):
+            self.trend_drill_tab = 1 - self.trend_drill_tab
+            return True
+        if self.trend_economics:
+            if act in ("down", "up", "page_down", "page_up", "top", "bottom"):
+                step = self._page_step(stdscr) if act.startswith("page_") else 1
+                if act in ("up", "page_up"):
+                    step = -step
+                self.trend_drill_scroll = (
+                    0
+                    if act == "top"
+                    else 10_000
+                    if act == "bottom"
+                    else max(0, self.trend_drill_scroll + step)
+                )
+                return True
+            if act == "select":
+                self.trend_drill_tab = 1
+                return True
         if act == "down":
             self.trend_drill_index = min(self.trend_drill_index + 1, max(0, n - 1))
         elif act == "up":
@@ -7085,7 +7118,9 @@ class App:
         current = self.trend_tabs[self.trend_tab % len(self.trend_tabs)]
         if up or down:
             older = down  # wheel down pages to older buckets, mirroring j/k
-            if self.trend_drill is not None:
+            if self.trend_economics:
+                self.trend_drill_scroll = max(0, self.trend_drill_scroll + (3 if down else -3))
+            elif self.trend_drill is not None:
                 n = len(self.trend_drill_sessions())
                 step = 1 if down else -1
                 self.trend_drill_index = max(0, min(self.trend_drill_index + step, n - 1))
@@ -7145,6 +7180,9 @@ class App:
             self.apply_header_sort(*sort)
             return True
         target = self.renderer.hit(my, mx)
+        if target and target[0] == "trendmodel":
+            self.trend_drill_tab = target[1]
+            return True
         if target and target[0] == "trendrow":
             # A ranked row (Models/Providers/Sources): click selects, double drills.
             self.trend_row_index = target[1]

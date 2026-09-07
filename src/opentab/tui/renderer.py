@@ -2896,7 +2896,9 @@ class Renderer:
         model = self.zoom_model
         if not model:
             return ["No model selected."]
-        workflows = self.current_sessions()
+        return self.model_economics(self.current_sessions(), model, width)
+
+    def model_economics(self, workflows: list[Workflow], model: str, width: int) -> list[str]:
         usage = self.model_scope_usage(workflows, model)
         if is_local_provider(model):
             list_cost = "- (local model)"
@@ -6160,10 +6162,27 @@ class Renderer:
         # table and already says what h/l, j/k, Enter and Esc do here, per tab and per
         # focus/drill state. Reserving ~49 cells for a second copy of that clipped the
         # right-hand tabs off every terminal under ~143 columns.
-        self.draw_tabs(stdscr, y + 1, 1, width - 2, tabs, self.trend_tab, kind="trend", rule=True)
+        if self.trend_model_drill:
+            self.draw_tabs(
+                stdscr,
+                y + 1,
+                1,
+                width - 2,
+                ("Economics", "Sessions"),
+                self.trend_drill_tab,
+                kind="trendmodel",
+                rule=True,
+            )
+        else:
+            self.draw_tabs(
+                stdscr, y + 1, 1, width - 2, tabs, self.trend_tab, kind="trend", rule=True
+            )
         inner_w = width - 4
         content_h = h - 4
-        if self.trend_drill is not None:
+        if self.trend_economics:
+            workflows = [w for w, _cost, _tokens in self.trend_drill_sessions()]
+            lines = self.model_economics(workflows, self.trend_drill[1], inner_w)
+        elif self.trend_drill is not None:
             lines = self.trend_drill_lines(inner_w, content_h)
         elif current == "Calendar":
             # The heat map paints itself: its cells carry per-cell color attributes,
@@ -6186,7 +6205,11 @@ class Renderer:
             lines = self.trend_machines(inner_w, content_h)
         else:
             lines = self.trend_models(inner_w, content_h)
-        content = lines[:content_h]
+        scroll = 0
+        if self.trend_economics:
+            scroll = max(0, min(self.trend_drill_scroll, len(lines) - content_h))
+            self.app.trend_drill_scroll = scroll
+        content = lines[scroll : scroll + content_h]
         # Center the chart in the panel instead of hugging the left edge: the
         # graph lines (everything but the "# title") move as one block so the
         # bars stay aligned, split the slack evenly so narrow charts (a week, a
@@ -6246,6 +6269,8 @@ class Renderer:
             line0, drawn, start = self._trend_rows_at
             kind = "trendses" if self.trend_drill else "trendrow"
             self._add_rows_region(kind, y + 3 + line0, 2, width - 3, start, drawn)
+        if self.trend_economics:
+            self._paint_scrollbar(stdscr, y + 3, width - 1, len(lines), content_h, scroll)
 
     def _bar_chart(
         self,

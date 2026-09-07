@@ -57,6 +57,12 @@ survives. Anything else you navigate to drops it, like every other in-place dril
 It isn't a deep link, though: a drill lives in the page, not the URL, so a link you copy
 from a model scope points at the scope, not at the model.
 
+The **Models** ranking in Trends uses the same two-tab drill over the active `R` range:
+it opens on **Economics**, while `h`/`l` switches between **Economics** and **Sessions**.
+The other ranked Trends drills still open their session list directly. `Esc` returns to
+the ranking; opening a model's session and returning with `Esc` or browser Back restores
+that model drill on **Sessions**.
+
 ## `w` — the what-if model
 
 The browser mirrors the TUI's [session-only rate comparison](pricing.md#comparing-models-with-w).

@@ -290,13 +290,13 @@ REGISTRY: tuple[Context, ...] = (
     ),
     Context(
         "trends.drill",
-        "A ranked row's session list (Enter on a Models/Providers/Harnesses row).",
+        "A ranked row's drill (Models: Economics/Sessions; other rows: sessions).",
         "trends",
         (
             *_SCROLL,
-            Action("select", ("enter",), "open the selected session"),
-            Action("tab_prev", ("h",), "leave the drill, previous tab"),
-            Action("tab_next", ("l", "right"), "leave the drill, next tab"),
+            Action("select", ("enter",), "show Sessions / open the selected session"),
+            Action("tab_prev", ("h",), "previous model subtab, else leave the drill, previous tab"),
+            Action("tab_next", ("l", "right"), "next model subtab, else leave the drill, next tab"),
             Action("back", ("esc", "left", "backspace"), "back to the ranked rows"),
         ),
     ),

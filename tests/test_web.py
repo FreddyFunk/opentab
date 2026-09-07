@@ -381,6 +381,72 @@ def test_web_trend_rankings_are_sortable_by_column():
     assert "h('th', { class: 'l' }, '')" in page and "h('th', null, 'Share')" in page
 
 
+def test_web_trends_model_drill_has_economics_and_sessions_tabs():
+    js = _js_source()
+    drill = js.split("function trendDrill()", 1)[1].split("\nfunction openTrendSession", 1)[0]
+    assert "TRENDS.drillTab || 'Economics'" in drill
+    assert "['Economics', 'Sessions']" in drill
+    assert "renderModelEconomics(body, W, key)" in drill
+    assert "openTrendSession(r.id)" in drill
+    assert "if (model) openTrendSession(r.id); else { closeTrends(); go('s', r.id); }" in drill
+    assert "TRENDS.drillTab = 'Economics'" in js
+    assert "TRENDS.drillTab === 'Sessions' ? 'Economics' : 'Sessions'" in js
+    assert "TRENDS.drillTab = null" in js  # Esc/back leaves the drill, not the overlay.
+    assert "#trends{position:fixed" in ot.webpage._CSS
+    assert "padding:26px 20px;overflow-y:auto" in ot.webpage._CSS
+
+
+def test_web_trends_model_economics_executes_shipped_js_for_active_scope():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript behavior check: Node.js is not installed (required in CI)")
+        return
+    source = _js_source()
+
+    def between(start, end):
+        return source[source.index(start) : source.index(end, source.index(start))]
+
+    shipped = "\n".join(
+        [
+            between("function whatifCost(", "function modelSessionUsage("),
+            between("function modelSessionUsage(", "function modelScopeUsage("),
+            between("function modelScopeUsage(", "const TOK_TYPES"),
+            between("function tokenEconomics(", "// Both sides use per-model rows"),
+        ]
+    )
+    harness = (
+        r"""
+const sum = (rows, f) => rows.reduce((a, r) => a + f(r), 0);
+const DATA = {models: {
+  active: [
+    {model:'target', runs:2, tokens:15000000, tok:[1000000,2000000,3000000,4000000,5000000,1000000]},
+    {model:'other', runs:9, tokens:9000000, tok:[9000000,0,0,0,0,0]}],
+  outside: [{model:'target', runs:20, tokens:20000000, tok:[20000000,0,0,0,0,0]}]
+}};
+const WI_PRICE = new Map([['target',[2,3,.5,.25,.75]],['other',[10,10,10,10,10]]]);
+const WI_LOCAL = new Set(), WI_UNPRICED = new Set();
+"""
+        + shipped
+        + r"""
+const W = [{id:'active'}];
+const usage = modelScopeUsage(W, 'target');
+const economics = tokenEconomics(W, 'target');
+console.log(JSON.stringify({usage, tokens:economics.tokens, totalCost:economics.totalCost}));
+"""
+    )
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    assert actual["usage"] == {
+        "runs": 2,
+        "tokens": 15_000_000,
+        "listCost": 20.75,
+        "est": False,
+    }
+    assert actual["tokens"] == [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000]
+    assert actual["totalCost"] == 20.75
+
+
 def test_web_mirrors_the_projects_ranking_and_its_drill():
     page = ot.render_html(ot.build_payload(app_with([workflow("w1", "2026-07-01 10:00:00")])))
     # The tab sits with the other session-derived rankings, after the model-derived ones.
@@ -1183,6 +1249,10 @@ def test_web_a_session_opened_from_a_drill_steps_back_into_it():
         "if (sc.kind === 's' && RETURN && location.hash === RETURN.to) location.hash = RETURN.from;"
         in js
     )
+    # Trends uses the same one-hop contract, restoring its model drill on Sessions.
+    assert "trends: { ...TRENDS, open: true, drillTab: 'Sessions' }" in js
+    assert "from: location.hash, to, msub: MSUB, tab: TAB" in js
+    assert "if (back && RETURN.trends) TRENDS = RETURN.trends;" in js
     # The Overview's Top sessions is NOT drill-scoped, so it keeps the plain navigation.
     top = js.split("function topSessionsTable(", 1)[1].split("\nfunction ", 1)[0]
     assert "go('s', r.id)" in top
@@ -1672,6 +1742,101 @@ for (const origin of ['#/', '#/m/2026-09']) {
   assert.equal(FILTER, '');
   assert.equal(EXPANDED.size, 0);
 }
+""",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_web_trends_model_navigation_executes_shipped_javascript():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript navigation execution: Node.js is not installed (required in CI)")
+        return
+    js = _js_source()
+    functions = "\n".join(
+        re.search(r"function " + name + r"\([^)]*\) \{.*?\n\}", js, re.S)[0]
+        for name in ("resetScopeState", "openTrendSession")
+    )
+    functions += "\n" + re.search(r"function closeTrends\(\) \{[^\n]+\}", js)[0]
+    start = js.index("document.addEventListener('keydown', e => {")
+    end = js.index("\n});\n\nfunction render", start) + len("\n});")
+    handler = js[start:end]
+    result = subprocess.run(
+        [
+            node,
+            "-e",
+            """
+const assert = require('node:assert/strict');
+let keyHandler;
+const document = {
+  activeElement: null,
+  addEventListener(type, fn) { if (type === 'keydown') keyHandler = fn; },
+  querySelector() { return null; }, querySelectorAll() { return []; }, getElementById() { return null; }
+};
+let location = {hash: '#/m/2026-09'};
+let STARTUP_WARNINGS = [], WHATS_NEW_OPEN = false, THEMEPICK = false;
+let WHATIF = {open:false}, PRICES = {open:false}, RANGE = {pick:false};
+let TRENDS = {open:true, tab:'Models', drill:{kind:'model', key:'target'}, drillTab:'Economics'};
+let META = {demo:false}, BROWSE = 'time', FOCUS = '', TAB = 'Models', MODE = 'real';
+let MSUB = null, TURN_DRILL = null, RETURN = null, W = [], FILTER = '';
+const EXPANDED = new Set(), TREND_TABS = ['Models'];
+let trendRenders = 0;
+function renderTrends() { trendRenders++; }
+function render() {} function curScope() { return location.hash.startsWith('#/s/') ? {kind:'s'} : {kind:'m'}; }
+function tabsFor() { return ['Overview']; } function distinctYears() { return []; }
+function closeStartupWarning() {} function closeWhatsNew() {} function closeTheme() {}
+function closeWhatif() {} function closePrices() {} function closeRange() {}
+function whatifShown() { return []; } function stepWhatif() {} function whatifFlip() {}
+function armWhatif() {} function openTheme() {} function renderPrices() {} function stepTrend() {}
+function openPrices() {} function openTrends() {} function openRange() {} function applyRange() {}
+function sidebarList() { return null; } function focusOrder() { return []; } function clearMsub() {}
+function go(kind, arg) { location.hash = kind ? '#/' + kind + '/' + encodeURIComponent(arg) : '#/'; }
+function toggleWhatif() {} function setBrowse() {} function openWhatsNew() {}
+"""
+            + functions
+            + handler
+            + """
+function event(key) {
+  const e = {key, target:{matches(){return false}}, metaKey:false, ctrlKey:false, altKey:false,
+    prevented:false, preventDefault(){this.prevented=true}};
+  keyHandler(e); return e;
+}
+
+assert.equal(event('l').prevented, true);
+assert.equal(TRENDS.drillTab, 'Sessions');
+assert.equal(event('h').prevented, true);
+assert.equal(TRENDS.drillTab, 'Economics');
+
+TRENDS.drillTab = 'Sessions';
+const origin = location.hash;
+openTrendSession('s1');
+assert.equal(location.hash, '#/s/s1');
+assert.equal(TRENDS.open, false);
+resetScopeState(); // hashchange entering the session
+assert.ok(RETURN);
+assert.equal(event('Escape').prevented, false);
+assert.equal(location.hash, origin);
+resetScopeState(); // hashchange returning to Trends
+assert.equal(TRENDS.open, true);
+assert.equal(TRENDS.drill.kind, 'model');
+assert.equal(TRENDS.drillTab, 'Sessions');
+assert.equal(RETURN, null);
+
+location.hash = '#/s/s1';
+TRENDS = {open:true, tab:'Models', drill:{kind:'model', key:'target'}, drillTab:'Sessions'};
+const existingReturn = {from:'#/m/2026-09', to:'#/s/s1', marker:true};
+RETURN = existingReturn;
+const before = trendRenders;
+openTrendSession('s1');
+assert.equal(location.hash, '#/s/s1');
+assert.equal(RETURN, existingReturn);
+assert.equal(TRENDS.open, false);
+assert.equal(TRENDS.drill, null);
+assert.equal(trendRenders, before + 1);
 """,
         ],
         capture_output=True,

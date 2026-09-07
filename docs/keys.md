@@ -109,6 +109,13 @@ decomposition, even when the harness records per-model spend. A `~` marks a gues
 rate; a local model has no list-price cost. See [Token economics](pricing.md#token-economics).
 `Esc` steps back to the Models table you came from.
 
+**Trends → Models** opens the same **Economics / Sessions** tabs, scoped to the
+active date range rather than the sidebar selection. `h`/`l` switches those tabs;
+`Enter` on Economics goes to Sessions. `j`/`k`, paging and `g`/`G` scroll Economics
+on small terminals. Its chart always uses list rates; the Trends session table
+keeps its existing Cost/Tokens columns and current price mode. Other ranked
+Trends rows still open Sessions directly.
+
 ## Sessions & projects
 
 Every session list carries a **Worked** column — how long the agent was *actually
@@ -134,7 +141,7 @@ worked 2h 15m (until 14:15)`. The Context tab still has the richer wall-clock st
 
 | Key | Action |
 |-----|--------|
-| `T` | Trends — Daily · Weekly · Monthly · Calendar · Models · Providers · Projects · Harnesses. `h`/`l` tabs · `j`/`k` page months/weeks/years. On the charts and Calendar: `Enter` focuses, arrows pick a bar/day, `Enter` drills in, `Esc` back. On the ranked tabs: `j`/`k` pick a row · `s` sorts its visible columns · `Enter` its sessions · `Enter` again opens one |
+| `T` | Trends — Daily · Weekly · Monthly · Calendar · Models · Providers · Projects · Harnesses. `h`/`l` tabs · `j`/`k` page months/weeks/years. On the charts and Calendar: `Enter` focuses, arrows pick a bar/day, `Enter` drills in, `Esc` back. On rankings: `j`/`k` pick · `s` sort · `Enter` drill. Models opens Economics / Sessions; other rows open Sessions directly |
 | `P` | Model prices — the table behind the `$` estimate; see [Pricing](pricing.md) for the views, sorting, and pinning |
 | `W` | What's New — additions, improvements and notable fixes bundled with this release. `j`/`k`, arrows, paging and `g`/`G` scroll; `o` opens the full GitHub release; `Esc`, `q`, or `W` closes. Opening it from Help returns to Help |
 | `$` | Toggle what-if prices — what unpriced usage would cost at API list rates |

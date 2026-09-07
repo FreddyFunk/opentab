@@ -135,6 +135,8 @@ def context_label(app: App) -> str:
     if in_prices(app):
         return "Prices"
     if in_trends(app):
+        if app.trend_model_drill:
+            return "Trends · Models · " + ("Economics" if app.trend_economics else "Sessions")
         return f"Trends · {trend_tab(app)}"
     tab = app.active_tab_name()
     if app.view == "session":
@@ -161,6 +163,8 @@ def _trend_pager_alias(app: App) -> str:
 
 
 def _trend_jk(app: App) -> str:
+    if app.trend_economics:
+        return "scroll token economics"
     if app.trend_drill is not None:
         return "move in the list"
     if _ranked_trend(app):
@@ -185,10 +189,16 @@ def _chart_arrows(app: App) -> str:
 
 
 def _trend_enter(app: App) -> str:
+    if app.trend_economics:
+        return "show the sessions that used this model"
     if app.trend_drill is not None:
         return "open the session"
     if _ranked_trend(app):
-        return "the sessions behind this row"
+        return (
+            "this model's economics and sessions"
+            if trend_tab(app) == "Models"
+            else "the sessions behind this row"
+        )
     if app.trend_focus:
         return "drill into the picked bar / day"
     return f"focus the chart — then {_chart_arrows(app)} pick"
@@ -464,7 +474,11 @@ KEYS: tuple[Key, ...] = (
         id="trends-tabs",
         ctx=binding_context,
         actions=("tab_prev", "tab_next"),
-        summary="switch tab",
+        summary=lambda app: "switch Economics / Sessions"
+        if app.trend_model_drill
+        else "switch Trends tab (leaves the drill)"
+        if app.trend_drill
+        else "switch tab",
         section="here",
         when=in_trends,
         chip="tabs",
@@ -476,7 +490,9 @@ KEYS: tuple[Key, ...] = (
         summary=_trend_enter,
         section="here",
         when=in_trends,
-        chip=lambda app: "drill"
+        chip=lambda app: "sessions"
+        if app.trend_economics
+        else "drill"
         if (app.trend_focus or app.trend_drill is not None or _ranked_trend(app))
         else "focus",
     ),
@@ -488,7 +504,11 @@ KEYS: tuple[Key, ...] = (
         section="here",
         # Monthly has no paging dimension.
         when=lambda app: in_trends(app) and bool(_trend_jk(app)),
-        chip=lambda app: "rows" if _ranked_trend(app) or app.trend_drill else "page",
+        chip=lambda app: "scroll"
+        if app.trend_economics
+        else "rows"
+        if _ranked_trend(app) or app.trend_drill
+        else "page",
     ),
     Key(
         id="trends-sort",

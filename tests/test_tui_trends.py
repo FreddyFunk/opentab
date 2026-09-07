@@ -634,8 +634,11 @@ def test_trend_models_rows_drill_into_sessions_and_a_session():
     assert app.trend_ranked_keys() == ["anthropic/opus", "openai/gpt-5"]
     app.handle_key(None, ord("j"))  # row cursor moves; the tab stays put
     assert app.trend_row_index == 1 and app.trend_tabs[app.trend_tab] == "Models"
-    app.handle_key(None, 10)  # Enter -> the row's sessions list
+    app.handle_key(None, 10)  # Enter -> the model's economics
     assert app.trend_drill == ("model", "openai/gpt-5")
+    assert app.trend_economics
+    app.handle_key(None, ord("l"))
+    assert not app.trend_economics and app.trend_drill_tab == 1
     rows = app.trend_drill_sessions()
     assert [w.id for w, _c, _t in rows] == ["b"] and rows[0][1] == 2.0
     lines = app.renderer.trend_drill_lines(80, 12)
@@ -647,6 +650,7 @@ def test_trend_models_rows_drill_into_sessions_and_a_session():
     app.handle_key(None, 27)  # Esc -> back out to the day zoom
     app.handle_key(None, 27)  # Esc -> back to the Trends drill list
     assert app.trends and app.trend_drill == ("model", "openai/gpt-5")
+    assert app.trend_drill_tab == 1
     assert app.trend_tabs[app.trend_tab] == "Models"
     app.handle_key(None, 27)  # Esc -> back to the ranked rows
     assert app.trends and app.trend_drill is None
@@ -801,16 +805,96 @@ def test_trend_drill_list_h_l_switch_tabs_instead_of_closing():
     while app.trend_tabs[app.trend_tab] != "Models":
         app.handle_key(None, ord("l"))
     app.handle_key(None, ord("j"))
-    app.handle_key(None, 10)  # the model's sessions
+    app.handle_key(None, 10)  # the model's economics
+    app.handle_key(None, 10)  # its sessions
     app.handle_key(None, 10)  # into a session
     app.handle_key(None, 27)  # Esc -> day zoom
     app.handle_key(None, 27)  # Esc -> back to the drill list
     assert app.trends and app.trend_drill == ("model", "openai/gpt-5")
-    app.handle_key(None, ord("l"))  # -> Providers, drill left behind, overlay open
+    app.handle_key(None, ord("l"))  # back to Economics within the same model
+    assert app.trends and app.trend_economics
+    app.handle_key(None, ord("h"))
+    assert app.trend_drill_tab == 1
+    app.handle_key(None, 27)  # leave the model before switching Trends tabs
+    app.handle_key(None, ord("l"))
     assert app.trends and app.trend_drill is None
     assert app.trend_tabs[app.trend_tab] == "Providers" and app.trend_row_index == 0
     app.handle_key(None, ord("h"))  # and back onto Models
     assert app.trends and app.trend_tabs[app.trend_tab] == "Models"
+    app.handle_key(None, ord("l"))
+    app.handle_key(None, 10)  # Providers still open a direct sessions list.
+    assert app.trend_drill[0] == "provider"
+    app.handle_key(None, ord("h"))
+    assert app.trend_drill is None and app.trend_tabs[app.trend_tab] == "Models"
+
+
+def test_trends_model_economics_reuses_model_and_range_scoped_card():
+    model = "anthropic/claude-opus-4.5"
+    app = app_with(
+        [
+            workflow("mixed", "2026-06-01 12:00:00", directory="/x"),
+            workflow("target", "2026-06-02 12:00:00", directory="/x"),
+            workflow("old", "2026-05-01 12:00:00", directory="/x"),
+        ]
+    )
+    target = dict(
+        _model_row(model, 5.0, 1500000),
+        input=100000,
+        output=200000,
+        reasoning=300000,
+        cache_read=400000,
+        cache_write=500000,
+        cache_write_1h=100000,
+    )
+    app._model_by_root = {
+        "mixed": [target, dict(_model_row("openai/gpt-5", 90, 9000000), input=9000000)],
+        "target": [target],
+        "old": [target],
+    }
+    app._models_loaded = True
+    app.set_range_from_text("2026-06")
+    app.open_trends()
+    app.trend_tab = app.trend_tabs.index("Models")
+    app.trend_row_index = app.trend_ranked_keys().index(model)
+    app._open_trend_drill()
+    assert app.trend_economics
+    workflows = [w for w, _, _ in app.trend_drill_sessions()]
+    assert {w.id for w in workflows} == {"mixed", "target"}
+    econ = app.token_economics(workflows, model)
+    assert econ.tokens == (200000, 400000, 600000, 800000, 1000000)
+    expected = app.renderer.model_economics(workflows, model, 74)
+    app.toggle_api_prices()
+    assert app.renderer.model_economics(workflows, model, 74) == expected
+    assert "Sessions:   2" in "\n".join(expected)
+
+    # Every line remains reachable at the minimum viewport, including chart notes.
+    orig_cp = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: 0
+        screen = FakeScreen(18, 78)
+        app.renderer.draw_trends(screen, 0, 16, 78)
+        assert "Economics" in screen_text(screen)
+        assert app.renderer._trend_rows_at is None
+        assert ot.keymap.context_label(app) == "Trends · Models · Economics"
+        assert "scroll" in ot.keymap.BY_ID["trends-page"].text(app)
+        app.handle_key(screen, ord("G"))
+        screen = FakeScreen(18, 78)
+        app.renderer.regions = []
+        app.renderer.draw_trends(screen, 0, 16, 78)
+        assert app.trend_drill_scroll == len(expected) - 12
+        assert "TOTAL" in screen_text(screen)
+        app._mouse_trends(5, 5, True, False, False, False)
+        assert app.trend_drill_scroll == max(0, len(expected) - 15)
+        app.handle_key(screen, ord("g"))
+        assert app.trend_drill_scroll == 0
+        region = next(r for r in app.renderer.regions if r[0] == "trendmodel" and r[-1] == 1)
+        app._mouse_trends(region[1], region[2], False, False, True, False)
+        assert app.trend_drill_tab == 1
+        app.handle_key(screen, ord("h"))
+        app.handle_key(screen, 10)
+        assert app.trend_drill_tab == 1  # Enter also reaches Sessions, not a hidden row.
+    finally:
+        ot.curses.color_pair = orig_cp
 
 
 def test_trends_overlay_toggles_and_switches_tabs():

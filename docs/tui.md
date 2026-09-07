@@ -117,6 +117,12 @@ Sorting uses those attributed values, and export includes them alongside the
 whole-session totals. `session_metric_labels` feeds both displayed headers and
 click-to-sort keys, keeping a renamed column clickable.
 
+The Trends Models drill reuses the same Economics card over its active-range
+sessions, rather than the sidebar scope. `trend_drill_tab` selects Economics or
+Sessions; `trend_drill_scroll` pages the card without moving the session cursor.
+Returning from a session restores Sessions. Other ranked drills remain direct
+session lists, and the Trends session table retains its current-price-mode costs.
+
 The attributed dollars are always **list-rate calculations** from per-model token
 rows, including the one-hour cache-write subset. They are not a decomposition of
 recorded spend. Unknown rates receive an estimate marker. Local models receive
