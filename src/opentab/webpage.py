@@ -50,6 +50,7 @@ _SHELL = """<!DOCTYPE html>
 <div id="rangepick" hidden></div>
 <div id="whatifpick" hidden></div>
 <div id="themepick" hidden></div>
+<div id="whats-new" hidden role="dialog" aria-modal="true" aria-labelledby="wn-title"></div>
 <div id="startup-warning" hidden role="dialog" aria-modal="true" aria-labelledby="startup-warning-title"></div>
 <div id="tip" hidden></div>
 <script type="application/json" id="opentab-data">__PAYLOAD__</script>
@@ -89,7 +90,7 @@ a:hover{color:var(--accent-bright);text-decoration:underline}
 .chip{border:1px solid var(--line);border-radius:20px;padding:1px 10px;font-size:11px;color:var(--ink2);background:var(--panel)}
 .chip b{color:var(--ink);font-weight:600}
 .chip.demo{color:var(--accent);border-color:var(--accent)}
-#hright{display:flex;align-items:center;gap:8px;margin-left:auto}
+#hright{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-left:auto;flex-wrap:wrap}
 .badge{font-size:10px;letter-spacing:.12em;text-transform:uppercase;border:1px solid;border-radius:3px;padding:2px 8px}
 .badge.est{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 9%,transparent)}
 .badge.sub{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 50%,transparent);background:color-mix(in srgb,var(--bad) 8%,transparent)}
@@ -419,6 +420,37 @@ table.prices .tag{color:var(--mut);font-size:11px;margin-left:7px}
 .sw-key{display:block;color:var(--mut);font-size:10.5px;margin-top:9px}
 @media (max-width:600px){.sw-panel{padding:24px 18px 22px}.sw-panel h2{font-size:14px}}
 
+#whats-new{position:fixed;inset:0;z-index:250;background:var(--scrim);display:flex;
+  align-items:center;justify-content:center;padding:24px}
+#whats-new[hidden]{display:none}
+.wn-panel{width:min(660px,100%);max-height:86vh;display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:0 16px 56px rgba(0,0,0,.35)}
+.wn-scroll{padding:22px 26px;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain;min-height:0}
+.wn-head{display:flex;flex:none;align-items:center;gap:12px;padding:17px 26px;border-bottom:1px solid var(--line)}
+.wn-head h2{font-size:16px;color:var(--ink);margin:0}
+.wn-version{color:var(--accent);font-size:12px}
+.wn-head .wn-close{margin-left:auto}
+.wn-close{flex:none;font:inherit;font-size:11px;padding:5px 9px;border:1px solid var(--line);
+  border-radius:4px;background:var(--bg);color:var(--ink2);cursor:pointer}
+.wn-close:hover,.wn-close:focus-visible{color:var(--accent);border-color:var(--accent);outline:none}
+.wn-section+.wn-section{margin-top:22px}
+.wn-section h3{display:flex;align-items:center;gap:12px;font-size:12px;font-weight:600;color:var(--accent);margin:0 0 9px}
+.wn-section h3::after{content:'';height:1px;flex:1;background:var(--line2)}
+.wn-section ul{padding-left:17px}
+.wn-item{padding:3px 0 3px 2px;color:var(--ink2);line-height:1.6;overflow-wrap:anywhere}
+.wn-item::marker{color:var(--mut)}
+.wn-availability{font-size:10px;color:var(--mut);white-space:nowrap}
+.wn-hint{color:var(--mut);font-size:11px;margin-top:2px}
+.wn-foot{display:flex;flex:none;justify-content:space-between;gap:16px;align-items:center;padding:13px 26px;border-top:1px solid var(--line)}
+.wn-foot a{font-size:11px}.wn-keys{color:var(--mut);font-size:10.5px;text-align:right}
+.wn-unavailable{color:var(--ink2)}
+@media (max-width:600px){
+  #hright{width:100%;justify-content:flex-start;margin-left:0}
+  #whats-new{padding:12px}.wn-panel{max-height:92vh}.wn-scroll{padding:18px}
+  .wn-head{padding:14px 18px;gap:9px}.wn-head h2{font-size:14px}
+  .wn-foot{padding:12px 18px}.wn-keys{display:none}
+}
+
 .meta{display:grid;grid-template-columns:auto 1fr;gap:2px 16px;font-size:12px;margin-bottom:2px}
 .meta dt{color:var(--mut);text-transform:uppercase;font-size:10px;letter-spacing:.1em;padding-top:2px}
 .meta dd{color:var(--ink2);overflow-wrap:anywhere}
@@ -432,6 +464,9 @@ const DATA = JSON.parse(document.getElementById('opentab-data').textContent);
 const META = DATA.meta;
 // A queue: several harnesses can expire history at once. Shown one at a time.
 let STARTUP_WARNINGS = (DATA.warnings || []).slice();
+const WHATS_NEW = DATA.whatsNew || {};
+let WHATS_NEW_OPEN = false;
+let WHATS_NEW_RETURN = null;
 // Range filtering must not hide a directly linked session.
 const ALL_W = DATA.workflows;
 let W = ALL_W;
@@ -501,6 +536,48 @@ function renderStartupWarning() {
     h('button', { class: 'sw-continue', onclick: closeStartupWarning, autofocus: true },
       more > 0 ? 'Continue (' + more + ' more)' : 'Continue for now'),
     h('span', { class: 'sw-key' }, 'Enter / Esc')));
+}
+
+function openWhatsNew(invoker) {
+  WHATS_NEW_RETURN = invoker || document.activeElement;
+  WHATS_NEW_OPEN = true;
+  renderWhatsNew();
+}
+function closeWhatsNew() {
+  WHATS_NEW_OPEN = false;
+  renderWhatsNew();
+  if (WHATS_NEW_RETURN && typeof WHATS_NEW_RETURN.focus === 'function') WHATS_NEW_RETURN.focus();
+  WHATS_NEW_RETURN = null;
+}
+function renderWhatsNew() {
+  const host = document.getElementById('whats-new');
+  if (!WHATS_NEW_OPEN) { host.hidden = true; host.textContent = ''; return; }
+  host.hidden = false; host.textContent = '';
+  const close = h('button', { class: 'wn-close', onclick: closeWhatsNew,
+    title: "Close What's New", 'aria-label': "Close What's New" }, 'esc  ✕');
+  const top = h('div', { class: 'wn-head' },
+    h('h2', { id: 'wn-title' }, "What's New"),
+    h('span', { class: 'wn-version' }, 'v' + (WHATS_NEW.version || META.version)), close);
+  const content = [];
+  if (!WHATS_NEW.unavailable) {
+    for (const section of WHATS_NEW.sections || []) {
+      const items = section.items.map(item => h('li', { class: 'wn-item' },
+        h('span', null, item.text),
+        item.availability && item.availability !== 'both'
+          ? h('span', { class: 'wn-availability' }, ' (' + item.availability.toUpperCase() + ')') : null,
+        item.hint ? h('div', { class: 'wn-hint' }, item.hint.text) : null));
+      content.push(h('section', { class: 'wn-section' },
+        h('h3', null, section.title), h('ul', null, items)));
+    }
+  } else content.push(h('p', { class: 'wn-unavailable' }, 'The bundled highlights do not match this installation.'));
+  const footer = h('div', { class: 'wn-foot' },
+    h('a', { class: 'wn-release', href: WHATS_NEW.release_url, target: '_blank', rel: 'noopener noreferrer' }, 'Read the full release ↗'),
+    h('span', { class: 'wn-keys' }, 'j/k scroll · Esc close'));
+  const scroll = h('div', { class: 'wn-scroll' }, content);
+  const panel = h('div', { class: 'wn-panel' }, top, scroll, footer);
+  panel.addEventListener('click', e => e.stopPropagation());
+  host.appendChild(panel);
+  close.focus();
 }
 
 let TAB = 'Overview';
@@ -2303,12 +2380,14 @@ function chrome() {
   right.appendChild(h('button', { class: 'hbtn', title: 'Trends (T)', onclick: openTrends }, '▚ trends'));
   right.appendChild(h('button', { class: 'hbtn', title: 'Model prices (P)', onclick: openPrices }, '$/M prices'));
   right.appendChild(h('button', { class: 'hbtn', title: 'Theme (C)', onclick: openTheme }, '◑ theme'));
+  right.appendChild(h('button', { class: 'hbtn', title: "What's New (W)",
+    onclick: e => openWhatsNew(e.currentTarget) }, '✦ what\'s new'));
   if (META.serve) right.appendChild(h('button', { class: 'hbtn', title: 're-read the data sources',
     onclick: () => fetch('/api/reload', { method: 'POST' }).then(() => location.reload()) }, '↻ refresh'));
   const hints = document.getElementById('hints');
   hints.textContent = '';
   [['j/k', 'move'], ['Tab', 'panel'], ['h/l', 'tabs'], ['Esc', 'back'], ['$', 'what-if'], ['w', 'what-if model'],
-   ['t/p/m', 'time/proj/machines'], ['T', 'trends'], ['P', 'prices'], ['C', 'theme'], ['R', 'range']]
+   ['t/p/m', 'time/proj/machines'], ['T', 'trends'], ['P', 'prices'], ['C', 'theme'], ['W', "what's new"], ['R', 'range']]
     .forEach(([k, lbl]) => hints.append(h('kbd', null, k), ' ' + lbl + '   '));
   document.getElementById('stamp').textContent =
     'generated by OpenTab v' + META.version + ' · ' + META.range + ' · ' + META.generated
@@ -2785,7 +2864,8 @@ function sidebarList(sc) {
   return { rows, index };
 }
 document.addEventListener('keydown', e => {
-  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+  if (e.target && e.target.matches &&
+      e.target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
@@ -2793,6 +2873,24 @@ document.addEventListener('keydown', e => {
   // Keyboard dispatch must follow visual overlay stacking order.
   if (STARTUP_WARNINGS.length) {
     if (e.key === 'Enter' || e.key === 'Escape') closeStartupWarning();
+    e.preventDefault(); return;
+  }
+  if (WHATS_NEW_OPEN) {
+    const body = document.querySelector('#whats-new .wn-scroll');
+    const controls = Array.from(document.querySelectorAll('#whats-new button, #whats-new a[href]'));
+    if ((e.key === 'Enter' || e.key === ' ') && controls.includes(e.target)) return;
+    if (e.key === 'Tab' && controls.length) {
+      const current = controls.indexOf(document.activeElement);
+      const step = e.shiftKey ? -1 : 1;
+      controls[(current + step + controls.length) % controls.length].focus();
+    }
+    else if (e.key === 'Escape' || e.key === 'q' || e.key === 'W') closeWhatsNew();
+    else if (body && (e.key === 'j' || e.key === 'ArrowDown')) body.scrollBy(0, 56);
+    else if (body && (e.key === 'k' || e.key === 'ArrowUp')) body.scrollBy(0, -56);
+    else if (body && e.key === 'PageDown') body.scrollBy(0, body.clientHeight * .75);
+    else if (body && e.key === 'PageUp') body.scrollBy(0, -body.clientHeight * .75);
+    else if (body && (e.key === 'g' || e.key === 'Home')) body.scrollTo(0, 0);
+    else if (body && (e.key === 'G' || e.key === 'End')) body.scrollTo(0, body.scrollHeight);
     e.preventDefault(); return;
   }
   if (THEMEPICK) { if (e.key === 'Escape' || e.key === 'C') closeTheme(); e.preventDefault(); return; }
@@ -2832,6 +2930,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (RANGE.pick) { if (e.key === 'Escape') closeRange(); e.preventDefault(); return; }
+  if (e.key === 'W') { openWhatsNew(document.activeElement); e.preventDefault(); return; }
   const sc = curScope();
   const tabs = tabsFor(sc);
   if (e.key === 'T') {
@@ -2910,6 +3009,7 @@ function render(scrollTop = true) {
   renderRange();
   renderWhatif();
   renderTheme();
+  renderWhatsNew();
   renderStartupWarning();
   if (scrollTop) window.scrollTo(0, 0);
 }
@@ -2918,6 +3018,7 @@ document.getElementById('prices').addEventListener('click', closePrices);
 document.getElementById('rangepick').addEventListener('click', closeRange);
 document.getElementById('whatifpick').addEventListener('click', closeWhatif);
 document.getElementById('themepick').addEventListener('click', closeTheme);
+document.getElementById('whats-new').addEventListener('click', closeWhatsNew);
 // Route changes clear scope-local state; render preserves only tabs valid in the new scope.
 window.addEventListener('hashchange', () => { resetScopeState(); render(); });
 // Apply persisted or payload theme before charts render.

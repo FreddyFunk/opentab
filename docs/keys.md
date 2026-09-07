@@ -136,13 +136,14 @@ worked 2h 15m (until 14:15)`. The Context tab still has the richer wall-clock st
 |-----|--------|
 | `T` | Trends — Daily · Weekly · Monthly · Calendar · Models · Providers · Projects · Harnesses. `h`/`l` tabs · `j`/`k` page months/weeks/years. On the charts and Calendar: `Enter` focuses, arrows pick a bar/day, `Enter` drills in, `Esc` back. On the ranked tabs: `j`/`k` pick a row · `s` sorts its visible columns · `Enter` its sessions · `Enter` again opens one |
 | `P` | Model prices — the table behind the `$` estimate; see [Pricing](pricing.md) for the views, sorting, and pinning |
+| `W` | What's New — additions, improvements and notable fixes bundled with this release. `j`/`k`, arrows, paging and `g`/`G` scroll; `o` opens the full GitHub release; `Esc`, `q`, or `W` closes. Opening it from Help returns to Help |
 | `$` | Toggle what-if prices — what unpriced usage would cost at API list rates |
 | `w` | Compare the current session at one model's list rates. Pick from used models or the catalog (`Tab` switches tiers, `f` filters, `Enter` selects, `Esc` cancels). Overview and Subagents show the comparison; other totals stay unchanged. Press `w` again to clear. See [Comparing models](pricing.md#comparing-models-with-w) for the arithmetic and limitations |
 | `H` | Harness picker (`j`/`k` move · `Enter` switch · `Esc` cancel) |
 | `M` | Machine filter (fleet only) — narrow **every** view to one box; the harness picker's twin (`j`/`k` move · `Enter` arm/clear · `Esc` cancel) |
 | `C` | Colour-theme picker — `j`/`k` live-preview · `Enter` keep · `Esc` revert (themes are shared with the web browser) |
 | `D` | Demo (anonymize for a shareable screen) — opens a multi-check picker of what to scramble: **Titles** (session / prompt / model / machine names), **Paths** (project directories), **Turns** (the expandable full prompt text), **Spend** (dollars + token magnitudes). Paths are separate from titles because a project tree is often the one label a demo *wants* real — leave it unchecked to keep real project names on an otherwise anonymised screen. `j`/`k` move · `Space` toggle a category · `a` all/none · `Enter` apply · `Esc` cancel. **While demo is on, `D` switches it straight back off** (one press, no picker); the categories are remembered, so `D` again re-offers them. From the CLI: `--demo` (all) or `--demo titles,spend` |
-| `r` / `q` / `?` | Reload the data · quit · help |
+| `r` / `q` / `?` | Reload the data · quit · help (Help also links to What's New) |
 
 The global toggles stay live *inside* the overlays: `?`, `C`, `H`, `M` (fleet), and `D`
 work from anywhere, Trends and Prices included.
@@ -150,7 +151,7 @@ work from anywhere, Trends and Prices included.
 ## What persists between runs
 
 The active **harness, range, sort, focused sidebar panel, ignored projects, bookmarks,
-pinned price rows, theme, and `$` what-if view are remembered between runs**, stored in
+pinned price rows, theme, `$` what-if view, and the last release announcement are remembered between runs**, stored in
 `~/.local/state/opentab/state.json` (the XDG *state* dir — regenerable prefs). Pass
 `--no-state` to disable; `--demo` never persists.
 
@@ -206,7 +207,7 @@ rebound.
 
 Contexts mirror what owns the keyboard: `[main]` for browse/zoom/session, `[trends]`
 (+ `[trends.chart]` for a focused chart, `[trends.drill]` for a ranked row's session
-list), `[prices]` (+ `[prices.sessions]`), `[help]`, `[notices]`, the shared `[menu]`
+list), `[prices]` (+ `[prices.sessions]`), `[help]`, `[whats-new]`, `[notices]`, the shared `[menu]`
 with per-picker overrides (`[menu.sort]`, `[menu.theme]`, `[menu.launch]`,
 `[menu.whatif]`, …), `[filter]` for the live filter line, `[input]` for the note/range
 prompts, and `[prompt.prices]`. A sub-context falls back to its family for anything it

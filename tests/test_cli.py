@@ -1028,6 +1028,106 @@ def test_goto_miss_opens_the_plain_tui_with_a_hint_instead_of_exiting():
         assert app.view == "browse"
         assert "no session yet" in app.notice
         assert app.toasts[-1].kind == "error"
+        assert app.whats_new_marker_to_save is None
+
+
+def test_tui_startup_configures_release_markers_for_state_and_privacy_modes():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "opencode.db")
+        _write_status_db(
+            db,
+            [("ses_oc", None, tmp, 1760000000000, 1760000500000, 2.0, 10)],
+        )
+        real = {
+            "argv": sys.argv,
+            "curses": ot.cli.curses,
+            "load_state": ot.cli.load_state,
+            "save_state": ot.cli.save_state,
+            "warnings": ot.cli._offer_retention_warnings,
+        }
+        captured = []
+
+        class FakeCurses:
+            @staticmethod
+            def wrapper(fn):
+                captured.append(fn.__self__)
+
+        ot.cli.curses = FakeCurses
+        ot.cli.save_state = lambda _app: None
+        ot.cli._offer_retention_warnings = lambda *_args, **_kwargs: None
+        try:
+            for marker, extra, pending, candidate in (
+                ("1.20.0", [], True, "1.20.0"),
+                (ot.__version__, [], False, ot.__version__),
+                (None, [], False, ot.__version__),
+                ("999.0.0", [], False, ot.__version__),
+                ("1.20.0", ["--demo"], False, None),
+                ("1.20.0", ["--no-state"], False, None),
+            ):
+                ot.cli.load_state = lambda marker=marker: (
+                    {} if marker is None else {"last_announced_version": marker}
+                )
+                sys.argv = [
+                    "opentab",
+                    "--source",
+                    "opencode",
+                    "--db",
+                    db,
+                    "--no-cache",
+                    *extra,
+                ]
+                with contextlib.redirect_stderr(io.StringIO()):
+                    assert ot.cli.main() == 0
+                app = captured[-1]
+                assert app._whats_new_hint_pending is pending
+                assert app.whats_new_marker_to_save == candidate
+        finally:
+            sys.argv = real["argv"]
+            ot.cli.curses = real["curses"]
+            ot.cli.load_state = real["load_state"]
+            ot.cli.save_state = real["save_state"]
+            ot.cli._offer_retention_warnings = real["warnings"]
+
+
+def test_goto_startup_keeps_the_release_hint_pending_until_the_tui_paints():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = os.path.join(tmp, "repo")
+        os.makedirs(repo)
+        db = os.path.join(tmp, "opencode.db")
+        _write_status_db(
+            db,
+            [("ses_oc", None, repo, 1760000000000, 1760000500000, 2.0, 10)],
+        )
+        captured = {}
+
+        class FakeCurses:
+            @staticmethod
+            def wrapper(fn):
+                captured["app"] = fn.__self__
+
+        real = (sys.argv, ot.cli.curses, ot.cli.load_state, ot.cli.save_state)
+        sys.argv = [
+            "opentab",
+            "--source",
+            "opencode",
+            "--db",
+            db,
+            "--goto",
+            repo,
+            "--no-cache",
+        ]
+        ot.cli.curses = FakeCurses
+        ot.cli.load_state = lambda: {"last_announced_version": "1.20.0"}
+        ot.cli.save_state = lambda _app: None
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                assert ot.cli.main() == 0
+        finally:
+            sys.argv, ot.cli.curses, ot.cli.load_state, ot.cli.save_state = real
+        app = captured["app"]
+        assert app.view == "session" and app.current_session().id == "ses_oc"
+        assert app._whats_new_hint_pending
+        assert app.whats_new_marker_to_save == "1.20.0"
 
 
 def test_goto_miss_hint_never_buries_the_notes_warning():

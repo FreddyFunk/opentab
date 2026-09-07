@@ -23,7 +23,8 @@ static host.
   tabs, Trends (`T`) and the price table (`P`) as overlays, live range scoping (`R`)
   and colour themes (`C`).
 - Driven by the TUI keys (`j`/`k`, `Tab`, `h`/`l`, `Esc`, `$`, `w`, `p`/`t`, `T`, `P`,
-  `R`) or the mouse; every table sorts on a header click.
+  `R`, `W`) or the mouse; every table sorts on a header click. `W` (or the visible
+  header action) opens the bundled What's New panel without checking for updates.
 - Time, project, machine and session scopes have **shareable deep links**
   (`#/m/2026-06`, `#/s/<session>`, …), and the browser's back button steps out.
   In-place drills and overlay state are not encoded in the URL.
@@ -102,6 +103,10 @@ the bundled palettes (Catppuccin Mocha/Latte, Tokyo Night/Day, Gruvbox, Nord,
 Dracula, Rosé Pine, …) render identically, and the page remembers the viewer's
 choice in `localStorage`.
 
+What's New is manual in static and live reports. It does not infer that the viewer
+upgraded, stores no unread marker in the browser, and restores focus to the control
+that opened it when closed.
+
 ## Contributing to the browser
 
 `web.py` adapts a headless App into data; `webpage.py` embeds that data and renders
@@ -116,6 +121,8 @@ it in the browser. Keep these boundaries when adding a field or interaction:
 - **Text stays text.** `render_html()` escapes the title and `</` in embedded JSON,
   inserting the payload last. Browser helpers create text nodes for user content.
   Preserve those boundaries rather than interpolating prompts into HTML.
+- **Release content stays shared.** Both frontends read the validated bundled resource
+  described in [`whats-new.md`](whats-new.md); the browser must not fetch or persist it.
 - **Sequential store access.** HTTP requests are handled sequentially, not by a
   thread-per-request server. SQLite-backed stores share connections; parallelizing
   handlers would change their access assumptions.

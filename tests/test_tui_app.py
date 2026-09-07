@@ -149,6 +149,63 @@ def test_scrollbar_thumb_is_proportional_and_reaches_both_ends():
     assert thumb(1_000, 10, 990) == (8, 2)  # tiny documents still get a visible thumb
 
 
+def test_release_hint_lasts_ten_seconds_without_changing_other_toast_durations():
+    app = app_with([])
+    now = [100.0]
+    app._toast_clock = lambda: now[0]
+    app._announce_whats_new()
+    assert app.toasts[-1].text == "Press W to see what's new"
+    assert app.toasts[-1].ttl == 10.0
+    app._mark_toasts_shown()
+    now[0] = 109.9
+    assert len(app.active_toasts()) == 1
+    now[0] = 110.0
+    assert app.active_toasts() == []
+    app.notify("Ordinary notification")
+    assert app.toasts[-1].ttl == app.TOAST_TTL == 4.0
+
+
+def test_release_hint_waits_for_first_paint_and_does_not_replace_an_existing_toast():
+    class LoopScreen(FakeScreen):
+        def keypad(self, _enabled):
+            pass
+
+        def timeout(self, _milliseconds):
+            pass
+
+        def get_wch(self):
+            return ord("q")
+
+    def run(existing_toast=False):
+        app = app_with([])
+        app.last_announced_version = "1.20.0"
+        app.configure_whats_new_hint(ot.__version__, enabled=True)
+        events = []
+        app.renderer.draw = lambda _screen: events.append("draw")
+        app.renderer.init_theme_colors = lambda: None
+        app._ensure_models = lambda: events.append("models")
+        app.maybe_prompt_prices = lambda: None
+        app.handle_key = lambda _screen, _key: False
+
+        def announce():
+            events.append("announce")
+            app._whats_new_hint_pending = False
+
+        app._announce_whats_new = announce
+        if existing_toast:
+            app.notify("keep me")
+        app._run(LoopScreen())
+        return app, events
+
+    app, events = run()
+    assert events[:4] == ["draw", "models", "draw", "announce"]
+    assert events.count("draw") == 3  # announcement gets its own repaint
+
+    app, events = run(existing_toast=True)
+    assert "announce" not in events
+    assert app.toasts[-1].text == "keep me"
+
+
 def test_scrollbar_reuses_the_right_border_without_touching_content_width():
     renderer = app_with([workflow("a", "2026-06-01 12:00:00")]).renderer
 

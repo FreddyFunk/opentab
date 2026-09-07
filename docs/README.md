@@ -25,6 +25,7 @@ Start with [Architecture](architecture.md), then follow the area you are changin
 | [Backend accounting](backends.md) | Token conventions, deduplication, subagent ownership and format-specific limitations |
 | [Startup and caching](caching.md) | Deferred work, lazy detail, incremental rollups, invalidation and cost polling |
 | [TUI internals](tui.md) | Navigation state, shared tables, terminal geometry, colours and the trace reader |
+| [What's New](whats-new.md) | In-app release highlights, upgrade announcements, shared content and release checks |
 
 [Contributing](../CONTRIBUTING.md) covers setup, test organization and checks.
 The pricing, privacy and web guides also explain their implementation boundaries.

@@ -1964,6 +1964,7 @@ def main() -> int:
     sys.stderr.flush()
     if use_state:
         apply_state(app, args, state)
+    app.configure_whats_new_hint(__version__, enabled=use_state)
     _offer_retention_warnings(app, args, source_key, can_persist=use_state)
     # Refresh after apply_state, which clears notices and would erase a notes warning.
     notes_ok = app.refresh_notes()

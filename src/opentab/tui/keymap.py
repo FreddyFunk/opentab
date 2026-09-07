@@ -811,6 +811,15 @@ KEYS: tuple[Key, ...] = (
         when=lambda app: in_main(app) or bool(app.help),
     ),
     Key(
+        id="whats-new",
+        ctx=lambda app: "help" if app.help else "main",
+        actions=("whats_new",),
+        summary="what's new in this release",
+        section="global",
+        when=lambda app: in_main(app) or bool(app.help),
+        chip="new",
+    ),
+    Key(
         id="help",
         ctx="main",
         actions=("help",),
@@ -873,6 +882,7 @@ FOOTER_ORDER = (
     "demo",
     "dollar",
     "whatif",
+    "whats-new",
     "help",
     "quit",
 )

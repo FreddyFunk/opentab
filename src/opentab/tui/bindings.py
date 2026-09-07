@@ -207,6 +207,7 @@ REGISTRY: tuple[Context, ...] = (
             Action("trends", ("T",), "trends — charts, calendar heatmap, rankings"),
             Action("prices", ("P",), "model prices overlay"),
             Action("notices", ("N",), "notifications — reread the toasts that faded"),
+            Action("whats_new", ("W",), "what's new in this release"),
             Action("help", ("?",), "the key cheat sheet"),
             Action("edit_keymap", ("K",), "edit these bindings in $EDITOR"),
             Action("quit", ("q",), "quit"),
@@ -222,7 +223,18 @@ REGISTRY: tuple[Context, ...] = (
             Action("harness", ("H",), "the harness picker floats above help"),
             Action("machine", ("M",), "the machine filter floats above help"),
             Action("edit_keymap", ("K",), "edit these bindings in $EDITOR"),
+            Action("whats_new", ("W",), "what's new in this release"),
             Action("close", ("esc", "q", "?"), "close the cheat sheet"),
+        ),
+    ),
+    Context(
+        "whats-new",
+        "The W release highlights pager.",
+        None,
+        (
+            *_SCROLL,
+            Action("open_release", ("o",), "open the full GitHub release"),
+            Action("close", ("esc", "q", "W"), "close the release highlights"),
         ),
     ),
     Context(

@@ -1,0 +1,38 @@
+{
+  "version": "1.21.0",
+  "sections": [
+    {
+      "title": "New",
+      "items": [
+        {
+          "text": "See what your agent actually did, right inside each turn.",
+          "availability": "tui",
+          "hint": {
+            "text": "Turns > prompt > turn",
+            "binding": {"context": "main", "action": "select"}
+          }
+        },
+        {
+          "text": "Use OpenTab in your agent via MCP.",
+          "hint": {"text": "Ask your agent: \"What did I spend on this project?\""}
+        }
+      ]
+    },
+    {
+      "title": "Improved",
+      "items": [
+        {"text": "See which model did the work, and which one ran up the bill."},
+        {"text": "Spot expensive turns and watch your agent's context fill up."}
+      ]
+    },
+    {
+      "title": "Fixed",
+      "items": [
+        {"text": "Priority requests and OpenAI cache writes now use the right rates."},
+        {"text": "Your archived Codex sessions are back, with their titles."},
+        {"text": "Open a session from a browser model drill and return where you left off."}
+      ]
+    }
+  ],
+  "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.21.0"
+}

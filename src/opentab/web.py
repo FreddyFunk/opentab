@@ -37,6 +37,7 @@ from opentab.util import (
     tool_namespace,
 )
 from opentab.webpage import render_html
+from opentab.whats_new import public_payload
 
 if TYPE_CHECKING:
     import argparse
@@ -267,6 +268,7 @@ def build_payload(app: App) -> dict:
         "nodes": nodes,
         "prices": _prices_payload(app),
         "whatif": _whatif_payload(app),
+        "whatsNew": public_payload(__version__),
         "machineMeta": _machine_meta_payload(app),
     }
 

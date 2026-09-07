@@ -39,7 +39,8 @@ are ignored, and the defaults are shown):
 - **Config** — `~/.config/opentab/`: `keymap.conf` (your key bindings), `remotes.json`
   (the saved machine list for `--pull`/`--remote`), and an optional `launcher` hook.
 - **State** — `~/.local/state/opentab/state.json`: a small preferences file (your last
-  harness, range, sort, bookmarks, ignores, and pins; disable with `--no-state`),
+  harness, range, sort, bookmarks, ignores, pins, and last announced OpenTab version;
+  disable with `--no-state`),
   plus the `state.json.lock` sidecar used to coordinate writers.
 - **Data** — `~/.local/share/opentab/notes.json`: your session notes, saved on every
   edit, plus the `notes.json.lock` sidecar used to coordinate writers.
@@ -79,6 +80,9 @@ be rebuilt from harness records.
 ## Network
 
 No outbound requests by default. Network activity is explicitly requested:
+
+Release highlights are bundled with OpenTab and perform no update check. Opening
+**What's New** is offline; only its explicit full-release link opens GitHub.
 
 - Price refresh (`--refresh-models`, or `r` in the `P` overlay) fetches models.dev
   list prices into the local cache. Otherwise the bundled snapshot suffices. See

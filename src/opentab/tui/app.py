@@ -22,7 +22,7 @@ try:
 except ImportError:  # native Windows has no stdlib curses
     curses = None
 
-from opentab import sources, themes, util
+from opentab import __version__, sources, themes, util
 from opentab.demo import (
     DEMO_ALL,
     DEMO_CATEGORIES,
@@ -86,6 +86,7 @@ from opentab.util import (
     resolve_project_root,
     workflow_fuzzy_score,
 )
+from opentab.whats_new import RELEASES_URL, load_release_notes, should_announce
 
 
 class Toast:
@@ -422,6 +423,13 @@ class App:
         self.help_scroll = 0
         self.toast_history = False
         self.toast_history_scroll = 0
+        self.whats_new = False
+        self.whats_new_scroll = 0
+        self.whats_new_notes = load_release_notes()
+        self.whats_new_version = __version__
+        self.whats_new_marker_to_save: str | None = None
+        self.last_announced_version: str | None = None
+        self._whats_new_hint_pending = False
         self._overlays: list[str] = []  # T/P open order; the last one is on top
         self.trends = False
         self.trend_tab = 0
@@ -2993,6 +3001,9 @@ class App:
                 self.notify(str(exc), "error")
                 return
         self.store = self._store_cache[cache_key]
+        if getattr(self.store, "demo", False):
+            self._whats_new_hint_pending = False
+            self.whats_new_marker_to_save = None
         self._reload_for_source(snapshot)
         if state is not None and self.query:
             # User-entered filters can contain private titles, paths, or notes.
@@ -5357,12 +5368,12 @@ class App:
     def toast_now(self) -> float:
         return self._toast_clock()
 
-    def notify(self, text: str, kind: str = "info") -> None:
+    def notify(self, text: str, kind: str = "info", *, ttl: float | None = None) -> None:
         toasts = self.toasts
         if not text:
             toasts.clear()  # clears the live card only; the N scrollback is history
             return
-        toast = Toast(text, kind, self.toast_now(), self.TOAST_TTL)
+        toast = Toast(text, kind, self.toast_now(), self.TOAST_TTL if ttl is None else ttl)
         # Several notices set within one input handler (e.g. "fetching…" → "refreshed")
         # never get a frame between them, so collapse onto one toast; distinct user
         # actions (a paint happened in between) stack instead. The scrollback mirrors
@@ -5385,6 +5396,41 @@ class App:
         # `N`: open the notices scrollback, landing at the top (newest first).
         self.toast_history = True
         self.toast_history_scroll = 0
+
+    def configure_whats_new_hint(self, installed_version: str, enabled: bool) -> None:
+        self.whats_new_version = installed_version
+        if not enabled or getattr(self.store, "demo", False):
+            self._whats_new_hint_pending = False
+            self.whats_new_marker_to_save = None
+            return
+        qualifies = should_announce(
+            self.last_announced_version, installed_version, self.whats_new_notes
+        )
+        self._whats_new_hint_pending = qualifies
+        self.whats_new_marker_to_save = (
+            self.last_announced_version
+            if self._whats_new_hint_pending and self.last_announced_version is not None
+            else installed_version
+        )
+
+    def open_whats_new(self) -> None:
+        self.whats_new = True
+        self.whats_new_scroll = 0
+        self._whats_new_hint_pending = False
+        self.whats_new_marker_to_save = self.whats_new_version
+
+    def _announce_whats_new(self) -> None:
+        main = self.keymap.label("main", "whats_new")
+        help_key = self.keymap.label("help", "whats_new")
+        if main:
+            text = f"Press {main} to see what's new"
+        elif help_key:
+            text = f"Press {help_key} in Help to see what's new"
+        else:
+            text = f"Updated to v{self.whats_new_version}. See What's New in the keymap."
+        self._whats_new_hint_pending = False
+        self.whats_new_marker_to_save = self.whats_new_version
+        self.notify(text, ttl=10.0)
 
     def edit_keymap(self, stdscr: curses.window | None) -> None:
         # `K`: suspend curses, open keymap.conf in $EDITOR, and reload the bindings
@@ -5560,6 +5606,16 @@ class App:
             ):
                 stdscr.refresh()
                 self.load_trace_expansion()
+                continue
+            if (
+                not first
+                and self._whats_new_hint_pending
+                and not getattr(self.store, "demo", False)
+                and self.startup_warning is None
+                and not self.price_prompt
+                and not self.toasts
+            ):
+                self._announce_whats_new()
                 continue
             stdscr.timeout(self._input_timeout_ms())
             key = self._read_key(stdscr)
@@ -6248,6 +6304,28 @@ class App:
             return self.handle_harness_menu_key(key)
         if self.whatif_menu:  # the `w` target picker floats above everything too
             return self.handle_whatif_menu_key(key)
+        if self.whats_new:
+            if key == 3:
+                return False
+            act = self.keymap.action("whats-new", key)
+            if act == "down":
+                self.whats_new_scroll += 1
+            elif act == "up":
+                self.whats_new_scroll = max(0, self.whats_new_scroll - 1)
+            elif act == "page_down":
+                self.whats_new_scroll += self._page_step(stdscr)
+            elif act == "page_up":
+                self.whats_new_scroll = max(0, self.whats_new_scroll - self._page_step(stdscr))
+            elif act == "top":
+                self.whats_new_scroll = 0
+            elif act == "bottom":
+                self.whats_new_scroll = 10_000
+            elif act == "open_release":
+                url = (self.whats_new_notes or {}).get("release_url", RELEASES_URL)
+                self.notify("opened full release" if open_path(url) else f"release: {url}")
+            elif act == "close":
+                self.whats_new = False
+            return True
         if self.help:
             # A pager like the price overlay: scroll keys page it. Closing is explicit
             # and every other key is swallowed -- it lists the keys that work here, so
@@ -6278,6 +6356,8 @@ class App:
                 self.open_machine_menu()  # the machine filter floats above help too
             elif act == "edit_keymap":
                 self.edit_keymap(stdscr)  # change the very keys the list is showing
+            elif act == "whats_new":
+                self.open_whats_new()
             elif act == "close":
                 self.help = False
             return True
@@ -6414,6 +6494,9 @@ class App:
             return True
         if act == "notices":
             self.open_notices()  # the notices scrollback: read a toast that faded
+            return True
+        if act == "whats_new":
+            self.open_whats_new()
             return True
         if act == "trends":
             self.open_trends()
@@ -6921,6 +7004,12 @@ class App:
             if click or double:
                 self.launch_menu = None  # click cancels the launch picker
                 self.launch_menu_backend = None
+            return True
+        if self.whats_new:
+            if up:
+                self.whats_new_scroll = max(0, self.whats_new_scroll - 3)
+            elif down:
+                self.whats_new_scroll += 3
             return True
         if self.toast_history:
             # The notices scrollback is drawn over the whole body, but it had no mouse

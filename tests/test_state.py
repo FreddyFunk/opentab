@@ -391,6 +391,54 @@ def test_dismissed_startup_warnings_are_persisted_and_shape_checked():
                 os.environ["XDG_STATE_HOME"] = old_xdg
 
 
+def test_release_announcement_marker_roundtrips_and_preserves_a_newer_writer():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "state.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"last_announced_version": "1.20.0", "future": True}, fh)
+        app = app_with([])
+        ot.apply_state(app, app.args, ot.load_state(path))
+        assert app.last_announced_version == "1.20.0"
+        app.configure_whats_new_hint(ot.__version__, enabled=True)
+        assert app._whats_new_hint_pending
+
+        # A concurrent newer app wins even after this older process announces and exits.
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"last_announced_version": "999.0.0", "future": True}, fh)
+        app._announce_whats_new()
+        with patch.object(state_module, "state_path", return_value=path):
+            ot.save_state(app)
+        saved = ot.load_state(path)
+        assert saved["last_announced_version"] == "999.0.0"
+        assert saved["future"] is True
+
+
+def test_unknown_release_baseline_is_quietly_established_on_save():
+    app = app_with([])
+    ot.apply_state(app, app.args, {})
+    app.configure_whats_new_hint(ot.__version__, enabled=True)
+    assert not app._whats_new_hint_pending
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "state.json")
+        with patch.object(state_module, "state_path", return_value=path):
+            ot.save_state(app)
+        assert ot.load_state(path)["last_announced_version"] == ot.__version__
+
+
+def test_save_without_a_release_candidate_leaves_the_disk_marker_alone():
+    app = app_with([])
+    assert app.whats_new_marker_to_save is None
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "state.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"last_announced_version": "1.20.0", "future": True}, fh)
+        with patch.object(state_module, "state_path", return_value=path):
+            ot.save_state(app)
+        saved = ot.load_state(path)
+        assert saved["last_announced_version"] == "1.20.0"
+        assert saved["future"] is True
+
+
 def test_trend_sort_is_persisted_in_state():
     # The Trends ranking column, like every other list's sort. Validated against the
     # UNION of the ranked tabs' vocabularies, not one tab's: the key is per-overlay and

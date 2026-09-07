@@ -55,6 +55,24 @@ def test_demo_drops_a_filter_query_you_typed():
     assert "demo mode" in app.notice
 
 
+def test_entering_demo_before_release_hint_delivery_does_not_acknowledge_it():
+    app = app_with([])
+    app.source_key = "opencode"
+    app.last_announced_version = "1.20.0"
+    app.configure_whats_new_hint(ot.__version__, enabled=True)
+    assert app._whats_new_hint_pending
+
+    demo_store = FakeStore([])
+    demo_store.demo = True
+    demo_store.demo_cats = ot.demo.DEMO_ALL
+    app._store_cache = {("opencode", ot.demo.DEMO_ALL): demo_store}
+    app.toggle_demo()
+
+    assert app.store.demo
+    assert not app._whats_new_hint_pending
+    assert app.whats_new_marker_to_save is None
+
+
 def test_demo_categories_gate_titles_paths_turns_and_spend():
     from opentab.demo import demo_config, scramble_workflow
     from opentab.models import Workflow

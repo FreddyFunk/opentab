@@ -1,6 +1,6 @@
 import opentab as ot
 
-from tests._support import AttrScreen, _model_row, app_with, workflow
+from tests._support import AttrScreen, FakeScreen, _model_row, app_with, screen_text, workflow
 
 
 def test_jk_scrolls_the_help_overlay():
@@ -41,6 +41,106 @@ def test_mouse_wheel_scrolls_the_help_overlay():
         assert not app.help
     finally:
         ot.curses.getmouse = orig
+
+
+def test_whats_new_opens_from_main_and_help_then_returns_to_its_caller():
+    app = _keymap_app()
+    underlying = (app.view, app.focus, app.tab, app.scroll)
+    app.handle_key(None, ord("W"))
+    assert app.whats_new and (app.view, app.focus, app.tab, app.scroll) == underlying
+    app.handle_key(None, ord("j"))
+    assert app.whats_new_scroll == 1
+    app.handle_key(None, ord("W"))
+    assert not app.whats_new and not app.help
+
+    app.handle_key(None, ord("?"))
+    app.handle_key(None, ord("W"))
+    assert app.whats_new and app.help
+    app.handle_key(None, 27)
+    assert not app.whats_new and app.help
+
+
+def test_whats_new_uses_remapped_keys_and_swallows_mouse_clicks():
+    app = _keymap_app()
+    app.keymap = ot.tui.bindings.Keymap(
+        {
+            ("main", "whats_new"): ["v"],
+            ("whats-new", "close"): ["x"],
+        }
+    )
+    assert app.handle_key(None, ord("W"))  # stolen/unbound default does nothing
+    assert not app.whats_new
+    app._announce_whats_new()
+    assert app.toasts[-1].text == "Press v to see what's new"
+    app.handle_key(None, ord("v"))
+    assert app.whats_new
+    app.renderer.regions = [("rows", "session", 5, 20, 2, 100, 0)]
+    original = ot.curses.getmouse
+    try:
+        ot.curses.getmouse = lambda: (0, 60, 12, 0, ot.curses.BUTTON1_DOUBLE_CLICKED)
+        app.handle_mouse()
+    finally:
+        ot.curses.getmouse = original
+    assert app.whats_new and app.view == "browse"
+    app.handle_key(None, ord("x"))
+    assert not app.whats_new
+
+
+def test_whats_new_renders_compact_release_sections_at_80x24():
+    app = _keymap_app()
+    app.open_whats_new()
+    screen = FakeScreen(24, 80)
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: n
+        app.renderer.draw_whats_new(screen, 2, 23, 80)
+    finally:
+        ot.curses.color_pair = original
+    text = screen_text(screen)
+    assert "What's New" in text
+    assert f"v{ot.__version__}" in text
+    assert app.whats_new_notes is not None
+    assert app.whats_new_notes["sections"][0]["title"] in text
+    assert app.whats_new_scroll == 0
+
+
+def test_whats_new_fix_only_panel_omits_empty_sections_and_keeps_wrapped_text():
+    app = _keymap_app()
+    message = "Corrected a cache-write estimate. " * 5
+    app.whats_new_notes = {"sections": [{"title": "Fixed", "items": [{"text": message}]}]}
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: n
+        lines = app.renderer.whats_new_lines(68)
+    finally:
+        ot.curses.color_pair = original
+    assert lines[0][0][1] == "Fixed"
+    assert not any(text in ("New", "Improved") for line in lines for _, text, _ in line)
+    assert all(dx + ot.display_width(text) <= 68 for line in lines for dx, text, _ in line)
+    body = " ".join(text for line in lines[1:] for dx, text, _ in line if dx == 2)
+    assert body == message.strip()
+
+
+def test_whats_new_uses_full_body_height_and_centers_both_border_labels():
+    for height, width in ((24, 80), (48, 128)):
+        app = _keymap_app()
+        app.whats_new_notes = {"sections": [{"title": "Fixed", "items": [{"text": "A fix."}]}]}
+        screen = FakeScreen(height, width)
+        frames, writes = [], []
+        app.renderer.draw_frame = lambda *args, frames=frames: frames.append(args[1:])
+        app.renderer.write = lambda *args, writes=writes: writes.append(args[1:])
+        original = ot.curses.color_pair
+        try:
+            ot.curses.color_pair = lambda n: n
+            app.renderer.draw_whats_new(screen, 3, height - 2, width)
+        finally:
+            ot.curses.color_pair = original
+        y, x, h, w, _ = frames[0]
+        assert y == 3 and h == height - 5
+        for row, phrase in ((y, "What's New"), (y + h - 1, "full release")):
+            label = next(write for write in writes if write[0] == row and phrase in write[2])
+            _, label_x, text, _ = label
+            assert label_x == x + (w - ot.display_width(text)) // 2
 
 
 def _keymap_app(workflows=None):
@@ -162,6 +262,7 @@ def test_every_registry_action_is_discoverable():
     # input-line hints -- all rendered from the live keymap), not by the ? overlay.
     self_documenting = {
         "help",
+        "whats-new",
         "notices",
         "menu",
         "menu.source",

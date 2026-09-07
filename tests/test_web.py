@@ -112,6 +112,23 @@ def test_web_payload_carries_both_cost_snapshots():
     assert w1["project"] == "/tmp/alpha"
     assert w1["date"].startswith("2026-05-01")
     assert payload["nodes"] == {}  # no subagents -> no per-session tree queries
+    assert payload["whatsNew"]["version"] == ot.__version__
+    assert payload["whatsNew"]["sections"]
+
+
+def test_web_whats_new_is_manual_theme_aware_and_never_persists_a_marker():
+    page = ot.render_html(ot.build_payload(app_with([workflow("w1", "2026-05-01 10:00:00")])))
+    assert 'id="whats-new"' in page and 'aria-labelledby="wn-title"' in page
+    assert "function openWhatsNew(invoker)" in page
+    assert "WHATS_NEW_RETURN.focus()" in page
+    assert "item.availability.toUpperCase()" in page
+    assert "h('span', null, item.text)" in page  # structured text, never innerHTML
+    assert "h('h3', null, section.title)" in page
+    assert "h('div', { class: 'wn-hint' }, item.hint.text)" in page
+    assert ".wn-panel{" in page and "@media (max-width:600px)" in page
+    assert "if (e.key === 'W') { openWhatsNew(document.activeElement)" in page
+    assert "input, textarea, select, [contenteditable]" in page
+    assert "opentab-whats" not in page and "last_announced_version" not in page
 
 
 def test_web_payload_and_page_carry_the_blocking_startup_warning():
@@ -426,6 +443,101 @@ def _js_source():
     # Read the actual browser script back from a rendered page.
     page = ot.render_html(ot.build_payload(app_with([workflow("w1", "2026-05-01 10:00:00")])))
     return page.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+
+
+def test_web_shipped_javascript_parses():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript syntax check: Node.js is not installed (required in CI)")
+        return
+    result = subprocess.run(
+        [node, "--check"],
+        input=_js_source(),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_whats_new_keyboard_ownership_and_focus_execute_in_shipped_javascript():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript behavior check: Node.js is not installed (required in CI)")
+        return
+    source = _js_source()
+    start = source.index("document.addEventListener('keydown', e => {")
+    end = source.index("\n});\n\nfunction render", start) + len("\n});")
+    handler = source[start:end]
+    harness = (
+        r"""
+let handler;
+const close = {name:'close', focus(){document.activeElement=this}, matches(){return false}};
+const link = {name:'link', focus(){document.activeElement=this}, matches(){return false}};
+const body = {clientHeight:100, scrollHeight:500, scrollBy(){}, scrollTo(){}};
+const document = {
+  activeElement: close,
+  addEventListener(type, fn){if(type === 'keydown') handler=fn},
+  querySelector(sel){return sel.includes('.wn-scroll') ? body : null},
+  querySelectorAll(){return [close, link]},
+  getElementById(){return null},
+};
+let STARTUP_WARNINGS=[], WHATS_NEW_OPEN=false, THEMEPICK=false;
+let WHATIF={open:false,i:0}, PRICES={open:false}, TRENDS={open:false}, RANGE={pick:false};
+let META={demo:false}, BROWSE='time', FOCUS='', TAB='', MODE='real', MSUB=null, TURN_DRILL=null, RETURN=null, W=[];
+let opened=0, closed=0;
+function openWhatsNew(){opened++;WHATS_NEW_OPEN=true}
+function closeWhatsNew(){closed++;WHATS_NEW_OPEN=false}
+function closeTheme(){} function closeWhatif(){} function closePrices(){} function closeTrends(){}
+function closeRange(){} function closeStartupWarning(){} function whatifShown(){return []}
+function stepWhatif(){} function whatifFlip(){} function armWhatif(){} function openTheme(){}
+function renderPrices(){} function renderTrends(){} function stepTrend(){} function openPrices(){}
+function curScope(){return {}} function tabsFor(){return []} function openTrends(){} function openRange(){}
+function applyRange(){} function sidebarList(){return null} function focusOrder(){return []}
+function render(){} function clearMsub(){} function go(){} function distinctYears(){return []}
+function toggleWhatif(){} function setBrowse(){}
+"""
+        + handler
+        + r"""
+function event(key,target=close,shiftKey=false){
+  const e={key,target,shiftKey,metaKey:false,ctrlKey:false,altKey:false,prevented:false,
+    preventDefault(){this.prevented=true}};
+  handler(e); return e;
+}
+const result={};
+WHATS_NEW_OPEN=true; document.activeElement=close; result.tab=event('Tab');
+result.tabFocus=document.activeElement.name;
+result.shiftTab=event('Tab',link,true); result.shiftTabFocus=document.activeElement.name;
+result.nativeEnter=event('Enter',link);
+result.swallowed=event('x',close);
+WHATS_NEW_OPEN=false; THEMEPICK=true; result.themeW=event('W'); THEMEPICK=false;
+RANGE.pick=true; result.rangeW=event('W'); RANGE.pick=false;
+WHATIF.open=true; result.whatifW=event('W'); WHATIF.open=false;
+const editable={matches(sel){return sel.includes('[contenteditable]')}};
+result.editableW=event('W',editable);
+console.log(JSON.stringify({opened, tab:result.tab.prevented, tabFocus:result.tabFocus,
+  shiftTab:result.shiftTab.prevented, shiftTabFocus:result.shiftTabFocus,
+  nativeEnter:result.nativeEnter.prevented, swallowed:result.swallowed.prevented,
+  themeW:result.themeW.prevented, rangeW:result.rangeW.prevented,
+  whatifW:result.whatifW.prevented, editableW:result.editableW.prevented}));
+"""
+    )
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    behavior = json.loads(result.stdout)
+    assert behavior == {
+        "opened": 0,
+        "tab": True,
+        "tabFocus": "link",
+        "shiftTab": True,
+        "shiftTabFocus": "close",
+        "nativeEnter": False,
+        "swallowed": True,
+        "themeW": True,
+        "rangeW": True,
+        "whatifW": True,
+        "editableW": False,
+    }
 
 
 def _js_whatif_cost(tok, rates):

@@ -78,7 +78,9 @@ the history scannable and feeds the release-notes pass.
 - **Subject:** imperative mood, lowercase first word (`add`, not `adds`/`added`), no
   trailing period, ≤72 chars. Body is optional; wrap ~72 and explain *why*, not *what*.
 - **Releases** use `chore(release): vX.Y.Z` (and bump `__version__` in
-  `src/opentab/__init__.py`; the version is not derived from a git tag).
+  `src/opentab/__init__.py`; the version is not derived from a git tag). Update the
+  bundled highlights in `src/opentab/data/whats-new.json` at the same time; the content
+  format and release workflow are documented in [`docs/whats-new.md`](docs/whats-new.md).
 - **No AI attribution:** omit generated-by messages and AI co-author trailers.
 - **Scope** is optional but preferred: exactly one, lowercase, from the vocabulary below.
   Don't coin a synonym for an existing scope (`tui` not `ui`, `pricing` not `prices`,

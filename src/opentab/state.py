@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from opentab import paths, themes
 from opentab.heatmap import HEAT_MAX_LEVELS, HEAT_MIN_LEVELS
+from opentab.whats_new import marker_to_save
 
 if TYPE_CHECKING:
     from opentab.tui.app import App
@@ -144,6 +145,11 @@ def save_state(app: App) -> None:
                 return  # Do not normalize away malformed authored data.
             original = baseline.get(key, set())
             data[key] = sorted((set(saved) - (original - local)) | (local - original))
+        marker = app.whats_new_marker_to_save
+        if marker is not None:
+            data["last_announced_version"] = marker_to_save(
+                current.get("last_announced_version"), marker
+            )
         current.update(data)
         if _write_state(current, path):
             # Track what this App saved, not the merged disk sets: importing external
@@ -286,4 +292,6 @@ def apply_state(app: App, args: argparse.Namespace, state: dict) -> None:
         app.dismissed_startup_warnings = {
             item for item in dismissed_warnings if isinstance(item, str) and item
         }
+    marker = state.get("last_announced_version")
+    app.last_announced_version = marker if isinstance(marker, str) else None
     app.notice = ""

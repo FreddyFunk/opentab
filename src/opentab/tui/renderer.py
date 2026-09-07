@@ -94,6 +94,7 @@ from opentab.util import (
     tool_namespace,
     unicode_screen,
 )
+from opentab.whats_new import RELEASES_URL
 
 
 class TraceLine(str):
@@ -761,6 +762,8 @@ class Renderer:
             self.draw_help(stdscr, top, bottom, width)
         if self.toast_history:
             self.draw_toast_history(stdscr, top, bottom, width)
+        if self.whats_new:
+            self.draw_whats_new(stdscr, top, bottom, width)
 
         if self.startup_warning is not None:
             self.draw_startup_warning(stdscr, height, width)
@@ -5121,6 +5124,94 @@ class Renderer:
                 box_y + box_h - 1,
                 box_x + max(2, box_w - len(hint) - 2),
                 hint,
+                curses.color_pair(1),
+            )
+
+    def whats_new_lines(self, inner_w: int) -> list[list[tuple[int, str, int]]]:
+        notes = self.app.whats_new_notes
+        accent = curses.color_pair(6)
+        muted = curses.color_pair(4)
+        bold = curses.A_BOLD
+        lines: list[list[tuple[int, str, int]]] = []
+
+        def text_rows(text: str, attr: int = 0, indent: int = 0) -> None:
+            room = max(8, inner_w - indent)
+            for part in wrap_cells(text, room) or [""]:
+                lines.append([(indent, part, attr)] if part else [])
+
+        if not notes:
+            text_rows("Release highlights are unavailable in this installation.", bold)
+            text_rows("Open the official releases page for the published notes.")
+            lines.append([])
+            text_rows(RELEASES_URL, accent)
+            return lines
+
+        for section in notes["sections"]:
+            if lines:
+                lines.append([])
+            title = section["title"]
+            rule_x = len(title) + 2
+            lines.append(
+                [
+                    (0, title, accent | bold),
+                    (rule_x, ("─" if unicode_screen() else "-") * (inner_w - rule_x), muted),
+                ]
+            )
+            for item in section["items"]:
+                availability = item.get("availability", "both")
+                suffix = f" ({availability.upper()})" if availability != "both" else ""
+                parts = wrap_cells(item["text"] + suffix, inner_w - 2)
+                for index, part in enumerate(parts):
+                    lines.append([(0, "·" if index == 0 else " ", muted), (2, part, 0)])
+                hint = item.get("hint")
+                if hint:
+                    binding = hint.get("binding")
+                    key = (
+                        self.app.keymap.label(binding["context"], binding["action"])
+                        if binding
+                        else ""
+                    )
+                    text_rows(f"{key}  {hint['text']}" if key else hint["text"], muted, 4)
+        return lines
+
+    def draw_whats_new(self, stdscr: curses.window, y: int, bottom: int, width: int) -> None:
+        inner_w = max(20, min(72, width - 8))
+        lines = self.whats_new_lines(inner_w)
+        box_w = inner_w + 6
+        box_x = max(0, (width - box_w) // 2)
+        box_h = bottom - y
+        box_y = y
+        for row in range(box_y, box_y + box_h):
+            self.write(stdscr, row, box_x, " " * box_w)
+        close = self._key("whats-new", "close")
+        release = self._key("whats-new", "open_release")
+        title = f"What's New · v{self.app.whats_new_version}"
+        border = curses.color_pair(6) | curses.A_BOLD
+        self.draw_frame(stdscr, box_y, box_x, box_h, box_w, border)
+        label = f" {shorten(title, box_w - 6)} "
+        self.write(stdscr, box_y, box_x + (box_w - display_width(label)) // 2, label, border)
+        visible = max(1, box_h - 3)
+        scroll = max(0, min(self.app.whats_new_scroll, max(0, len(lines) - visible)))
+        self.app.whats_new_scroll = scroll
+        for offset, segments in enumerate(lines[scroll : scroll + visible]):
+            row_y = box_y + 1 + offset
+            for dx, text, attr in segments:
+                self.write(stdscr, row_y, box_x + 3 + dx, text, attr)
+        self._paint_scrollbar(stdscr, box_y + 1, box_x + box_w - 1, len(lines), visible, scroll)
+        scroll_keys = self._keys("whats-new", "down", "up")
+        hints = [
+            f"{close} close" if close else "",
+            f"{release} full release" if release else "",
+            f"{scroll_keys} scroll" if len(lines) > visible and scroll_keys else "",
+        ]
+        hint = " · ".join(part for part in hints if part)
+        if hint:
+            label = f" {shorten(hint, box_w - 6)} "
+            self.write(
+                stdscr,
+                box_y + box_h - 1,
+                box_x + (box_w - display_width(label)) // 2,
+                label,
                 curses.color_pair(1),
             )
 
