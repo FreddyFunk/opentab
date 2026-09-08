@@ -6707,8 +6707,11 @@ class App:
             return self.handle_mouse()
         if key == curses.KEY_RESIZE:
             # A SIGWINCH (terminal/font resize) surfaces as a keystroke; it is not one.
-            # The next paint reads getmaxyx() fresh, so just swallow it -- otherwise it
-            # falls through to an overlay's "any other key closes" path and shuts it.
+            # Popup startup can resize after the first paint. Terminal reflow can leave
+            # old borders where curses' physical-screen cache expects unchanged cells;
+            # erase() alone only resets the virtual screen. Repaint the terminal too.
+            if stdscr is not None:
+                stdscr.clearok(True)
             return True
         # A non-ASCII character arrives as a str (_read_key). It flows through the same
         # routing as any key: the keymap can bind one ("ö = quit" works), the text

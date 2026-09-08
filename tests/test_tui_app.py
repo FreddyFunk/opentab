@@ -36,6 +36,21 @@ def test_terminal_resize_does_not_close_overlays():
     assert app.help
 
 
+def test_terminal_resize_invalidates_physical_screen_without_changing_navigation():
+    app = app_with([workflow("a", "2026-06-01 12:00:00", directory="/x")])
+    app.view = "session"
+    app.scroll = 17
+    app.help = True
+    invalidations = []
+    screen = SimpleNamespace(clearok=invalidations.append)
+
+    assert app.handle_key(screen, ot.curses.KEY_RESIZE)
+    assert invalidations == [True]
+    assert app.view == "session" and app.scroll == 17 and app.help
+    app.handle_key(screen, ord("j"))
+    assert invalidations == [True]  # ordinary scrolling retains differential repaint
+
+
 def test_startup_warning_is_prominent_dismissible_and_prioritized_over_price_prompt():
     app = app_with([])
     warning = {

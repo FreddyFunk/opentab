@@ -238,6 +238,14 @@ and `wrap_cells` prevent wide characters from overflowing or disappearing at the
 right edge. Prompt input handles the viewport inset separately because it paints
 from `App`. Pager sizing shares the renderer's chrome budget.
 
+Resize events preserve navigation but invalidate curses' physical-screen cache
+with `clearok(True)`. Popup startup can resize a terminal after its first paint;
+reflow may move old borders even where curses believes cells are unchanged. The
+resize signals can coalesce, leaving the final dimensions equal to the original
+ones, so a geometry comparison alone cannot detect this. The next frame must
+repaint the terminal, not just erase the virtual window. Ordinary scrolling keeps
+differential repainting.
+
 App and panel frames use heavy Unicode box glyphs when `unicode_screen()` permits
 them, otherwise curses ACS lines; string-built tables have an ASCII fallback.
 Checking the locale first matters: wide curses can silently draw garbage instead
