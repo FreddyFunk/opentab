@@ -1865,6 +1865,9 @@ class App:
     def session_trace(self, workflow_id: str) -> dict:
         if self.remote_trace_reader(workflow_id):
             return {}  # Remote content is keyed, explicit, and never read from rendering.
+        cached = self._trace_by_session.get(workflow_id)
+        if cached is not None:
+            return cached
         if self.store.demo:
             content = {}
             if self.session_supports_trace(workflow_id):
@@ -1873,9 +1876,6 @@ class App:
                     if key := row.get("content_key"):
                         content.update(demo_turn_content(key, records_reasoning=reasoning))
         else:
-            cached = self._trace_by_session.get(workflow_id)
-            if cached is not None:
-                return cached
             fetch = getattr(self.trace_owner(workflow_id), "turn_content", None)
             ok = fetch is not None and self.session_supports_trace(workflow_id)
             content = dict(fetch(workflow_id)) if ok else {}
@@ -1907,9 +1907,12 @@ class App:
             wid, loaded_key, events = self._trace_full
             if (wid, loaded_key) == (workflow_id, key):
                 return events
-        return list(self.session_trace(workflow_id).get(key) or []) if key else []
+        return self.session_trace(workflow_id).get(key, []) if key else []
 
     def _clear_trace_expansion(self, *, keep_remote: bool = False) -> None:
+        self.renderer._trace_layout_cache = None
+        self.renderer._trace_tool_at = {}
+        self.renderer._trace_output_ends = []
         if self._remote_trace_job is not None:
             self._remote_trace_job[3].cancel()
             self._remote_trace_job = None
@@ -2047,7 +2050,7 @@ class App:
         if wf is None or i is None:
             return []
         runs = self.turn_runs(wf.id)
-        return list(runs[i]) if 0 <= i < len(runs) else []
+        return runs[i] if 0 <= i < len(runs) else []
 
     @property
     def active_trace_drill(self) -> int | None:
@@ -2746,6 +2749,7 @@ class App:
             return
         invalidate_price_cache()
         self.renderer._turn_layout_cache = None
+        self.renderer._trace_layout_cache = None
         self._whatif_catalog_rows = None
         self._ensure_models()
         self._compute_api_costs()
@@ -4461,7 +4465,22 @@ class App:
             self.ignored_sessions or self._zooming_ignored_project()
         )
 
+    @contextlib.contextmanager
+    def session_selection(self):
+        """Reuse selection only while painting or moving within the same session."""
+        previous = getattr(self, "_session_selection", None)
+        if previous is None and self.view == "session":
+            self._session_selection = (self.current_session(),)
+        try:
+            yield
+        finally:
+            # Never carry a frame's selection into a filter, reload or navigation action.
+            self._session_selection = previous
+
     def current_session(self) -> Workflow | None:
+        snapshot = getattr(self, "_session_selection", None)
+        if snapshot is not None:
+            return snapshot[0]
         rows = self.current_sessions()
         if not rows:
             return None
@@ -5239,13 +5258,14 @@ class App:
 
     def move(self, delta: int) -> None:
         if self.view == "session":
-            if self._on_turns_tab():
-                if self.active_turn_drill is None:
-                    if self._move_turn_cursor(delta):
+            with self.session_selection():
+                if self._on_turns_tab():
+                    if self.active_turn_drill is None:
+                        if self._move_turn_cursor(delta):
+                            return
+                    elif self.active_trace_drill is None and self._move_trace_cursor(delta):
                         return
-                elif self.active_trace_drill is None and self._move_trace_cursor(delta):
-                    return
-            self.scroll = max(0, self.scroll + delta)
+                self.scroll = max(0, self.scroll + delta)
         elif self.view == "zoom":
             if self.on_sessions_tab:
                 n = len(self.current_sessions())

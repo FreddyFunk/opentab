@@ -21,6 +21,12 @@ layout, painting, and the hit regions produced by the current frame.
 read `self.current_sessions()` or `self.tab` through that shared interface.
 Assignments do not delegate; state changes in rendering code use `self.app`.
 
+Session frames and in-session cursor movement resolve the selected workflow once
+with `session_selection()`. Nested tab/drill checks reuse that snapshot instead
+of repeatedly rebuilding and sorting the enclosing session scope. It expires at
+the end of the frame or motion, including on exceptions; scope-changing actions
+must never run inside it.
+
 Most detail builders return `list[str]`, while scrolling pickers paint directly.
 Ordinary lines acquire money/token colors through `write_rich` at paint time.
 Structured side channels attach chart spans, header identities, and cursor
@@ -286,9 +292,9 @@ Turns retains one prompt/turn table layout and one session's prompt-run indices.
 Scrolling reuses the analysis, charts, formatted lines, and click map; only cursor
 highlight and viewport change. Layout keys include the turn snapshot, pane width,
 prompt drill, pricing mode, and capabilities. Reload and harness/demo changes
-clear both memos; a price refresh also clears the layout. Raw traces bypass this
-layout cache so expanded content keeps its separate lifetime and output markers
-continue to follow scrolling.
+clear both memos; a price refresh also clears the layout. Painting checks headers
+only in the visible slice, not across the entire cached table. Raw traces use a
+separate one-turn layout cache, released with trace expansion state.
 
 Context's measured curve uses main-thread `input + cache_read + cache_write`.
 Subagents have their own windows. Curve support is separate from optional
@@ -351,6 +357,12 @@ reported separately. Full output restores the recorded blank lines. Narration
 and reasoning use a 100-cell reading measure and limited Markdown presentation:
 headings and bold delimiters, with inline code protected and fenced code kept raw.
 Commands and results never undergo Markdown or numeric highlighting.
+
+Wrapped trace lines and output hit regions are reused until content, width,
+pricing, bindings or expansion state changes. Scrolling slices only the viewport;
+output targeting uses ordered section ends, and target markers and expansion
+hints are applied only to painted lines. No wrapping or session-wide pricing
+and grouping runs on a warm reader frame.
 
 `TraceLine` roles survive wrapping and scrolling. Tool gutters separate arguments
 from labeled output, recorded errors are explicit, and reader chrome quiets the

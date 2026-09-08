@@ -2835,6 +2835,153 @@ def _trace_app():
     return app
 
 
+class _ScrollScreen(AttrScreen):
+    def erase(self):
+        self.cells.clear()
+        self.attrs.clear()
+
+    def refresh(self):
+        pass
+
+
+class _ViewportLines(list):
+    def __iter__(self):
+        raise AssertionError("scrolling scanned the whole layout")
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            assert key.stop is not None and key.stop - (key.start or 0) <= 60
+        return super().__getitem__(key)
+
+
+def test_long_turn_list_scroll_bounds_layout_work_and_session_resolution():
+    app = _trace_app()
+    app.can_switch_source = lambda: False
+    wf = app.current_session()
+    base = app.session_turn_rows(wf.id)[0]
+    app._turns_by_session[wf.id] = [dict(base) for _ in range(2000)]
+    app._nodes_by_session[wf.id] = []
+    rnd = app.renderer
+    screen = _ScrollScreen(60, 160)
+    with patch("opentab.curses.color_pair", lambda n: n << 8):
+        rnd.draw(screen)
+        cached = rnd._turn_layout_cache
+        rnd._turn_layout_cache = (*cached[:2], _ViewportLines(cached[2]), *cached[3:])
+        runs = app.drilled_turn_indices()
+        with patch.object(
+            rnd, "_build_turns", side_effect=AssertionError("rebuilt table")
+        ), patch.object(app, "current_sessions", wraps=app.current_sessions) as scope:
+            for key in "j" * 65 + "k" * 10:
+                scope.reset_mock()
+                app.handle_key(None, ord(key))
+                rnd.draw(screen)
+                assert scope.call_count == 2, "resolve once per motion and once per frame"
+                assert app.drilled_turn_indices() is runs
+            assert app._trace_cursor == 55 and app.scroll > 0
+            assert app.scroll <= rnd._turn_cursor_line < app.scroll + 47
+
+
+def test_expanded_trace_scroll_reuses_layout_and_moves_output_targets():
+    app = _trace_app()
+    app.can_switch_source = lambda: False
+    app.store._CONTENT["k0"] = [
+        {"kind": "tool", "name": "first", "output": "first result\n" * 2000},
+        {"kind": "tool", "name": "second", "output": "second result\n" * 2000},
+        {"kind": "text", "text": "Closing explanation.\n" * 40},
+    ]
+    wf = app.current_session()
+    app._nodes_by_session[wf.id] = []
+    app.session_trace(wf.id)
+    app.open_trace_drill()
+    app.toggle_trace_output(0)
+    app.load_trace_expansion()
+    rnd = app.renderer
+    screen = _ScrollScreen(30, 120)
+    with patch("opentab.curses.color_pair", lambda n: n << 8):
+        rnd.draw(screen)
+        cached = rnd._trace_layout_cache
+        rnd._trace_layout_cache = (*cached[:4], _ViewportLines(cached[4]), *cached[5:])
+        cached = rnd._trace_layout_cache
+        with patch.object(
+            rnd, "_build_turn_trace", side_effect=AssertionError("rewrapped trace")
+        ), patch.object(
+            rnd, "turn_costs", side_effect=AssertionError("repriced turns")
+        ), patch.object(rnd, "turn_group_rows", side_effect=AssertionError("regrouped turns")):
+            for key in "j" * 30 + "k" * 10:
+                app.handle_key(None, ord(key))
+                rnd.draw(screen)
+                assert rnd._trace_layout_cache is cached
+            assert app.scroll == 20
+            assert rnd.trace_output_target() == 0
+            app.scroll = max(line for line, event in rnd._trace_tool_at.items() if event == 0) + 1
+            rnd.draw(screen)
+            assert rnd.trace_output_target() == 1
+            assert "▸ second" in screen_text(screen)
+            assert "Output · preview · Enter expand" in screen_text(screen)
+            app.handle_key(None, 10)
+            assert app._trace_open_outputs == {0, 1}
+        rnd.draw(screen)
+        assert rnd._trace_layout_cache is not cached
+
+
+def test_trace_layout_invalidation_and_content_lifetime():
+    app = _trace_app()
+    wf = app.current_session()
+    rnd = app.renderer
+    app.open_trace_drill()
+    first = rnd.detail_turns(wf, 100)
+    assert rnd.detail_turns(wf, 100) is first
+    narrow = rnd.detail_turns(wf, 80)
+    assert narrow is not first
+    app.toggle_api_prices()
+    repriced = rnd.detail_turns(wf, 80)
+    assert repriced is not narrow
+    app._trace_by_session[wf.id] = {"k0": [{"kind": "text", "text": "replacement content"}]}
+    replaced = rnd.detail_turns(wf, 80)
+    assert replaced is not repriced and "replacement content" in "\n".join(replaced)
+    app.toggle_trace_expansion()
+    assert "Loading full turn" in "\n".join(rnd.detail_turns(wf, 80))
+    app.load_trace_expansion()
+    full = rnd.detail_turns(wf, 80)
+    assert rnd.detail_turns(wf, 80) is full
+    app.toggle_trace_expansion()
+    assert rnd._trace_layout_cache is None
+    assert app._trace_full is None
+    rnd.detail_turns(wf, 80)
+    app.step_trace(1)
+    assert rnd._trace_layout_cache is None and not rnd._trace_tool_at
+    assert not rnd._trace_output_ends
+    assert "Turn 2 of 2" in rnd.detail_turns(wf, 80)[0]
+    app.close_trace_drill()
+    assert rnd._trace_layout_cache is None
+    for reload in (app.reload, app._reload_for_source):
+        app.open_turn_drill(0)
+        app.open_trace_drill()
+        rnd.detail_turns(wf, 80)
+        assert rnd._trace_layout_cache is not None
+        reload()
+        assert rnd._trace_layout_cache is None
+
+
+def test_session_selection_snapshot_is_nested_and_never_survives_the_frame():
+    app = _trace_app()
+    wf = app.current_session()
+    replacement = workflow("other", "2026-06-01 12:00:00")
+    with patch.object(app, "current_sessions", return_value=[wf]) as scope:
+        try:
+            with app.session_selection():
+                with app.session_selection():
+                    assert app.current_session() is wf
+                    assert app.active_turn_drill == 0
+                assert scope.call_count == 1
+                raise ValueError("failed frame")
+        except ValueError:
+            pass
+        scope.return_value = [replacement]
+        assert app.current_session() is replacement
+        assert app.active_turn_drill is None
+
+
 def test_turns_cache_reuses_prompt_drills_but_never_retains_trace_lines():
     from opentab.tui.renderer import TraceLine
 

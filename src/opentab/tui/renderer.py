@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import re
 import textwrap
+from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -209,6 +210,9 @@ class Renderer:
         self._trend_rows_at: tuple[int, int, int] | None = None
         self._turn_header_at: dict[int, int] = {}
         self._turn_layout_cache: tuple | None = None
+        self._trace_layout_cache: tuple | None = None
+        self._trace_tool_at: dict[int, int] = {}
+        self._trace_output_ends: list[tuple[int, int]] = []
         # Selected prompt header line, recomputed each paint for scroll/highlight.
         self._turn_cursor_line: int | None = None
         # Logical header lines become screen-coordinate sort regions during paint.
@@ -723,6 +727,10 @@ class Renderer:
     def draw(self, stdscr: curses.window) -> None:
         # Settle before painting so breadcrumbs cannot name a drill the session list drops.
         self.app.settle_drills()
+        with self.app.session_selection():
+            self._draw(stdscr)
+
+    def _draw(self, stdscr: curses.window) -> None:
         if not self.app._on_turns_tab() or self.app.active_trace_drill is None:
             self.app._clear_trace_expansion()
         self.apply_background(stdscr)  # theme bg fills the screen (before erase reads it)
@@ -2609,10 +2617,11 @@ class Renderer:
             lines = self.detail_overview(workflow, w - 4)
 
         tracing = current == "Turns" and self.app.active_trace_drill is not None
+        body_start = 0
         if tracing and lines:
             # The turn's identity stays above the scrolling transcript, below the tabs.
             self.write(stdscr, y + 2, x + 2, shorten(lines[0], w - 4), curses.A_BOLD)
-            lines = lines[2:]
+            body_start = 2
 
         if current == "Turns" and self.app._turn_follow:
             # Follow is one-shot and must run before the scroll clamp.
@@ -2620,10 +2629,12 @@ class Renderer:
             self.app._turn_follow = False
         loading_trace = tracing and self.app._trace_loading is not None
         if not loading_trace:
-            self.app.scroll = max(0, min(self.app.scroll, max(0, len(lines) - visible)))
+            self.app.scroll = max(
+                0, min(self.app.scroll, max(0, len(lines) - body_start - visible))
+            )
         paint_scroll = 0 if loading_trace else self.scroll
-        drawn = lines[paint_scroll : paint_scroll + visible]
-        headers = self.box_header_lines(lines) | set(self._line_sort_headers)
+        drawn = lines[body_start + paint_scroll : body_start + paint_scroll + visible]
+        target = self.trace_output_target() if tracing else None
         for offset, line in enumerate(drawn):
             attr = self.line_attr(line)
             if current == "Turns" and self.scroll + offset == self._turn_cursor_line:
@@ -2631,7 +2642,9 @@ class Renderer:
                 # gutters and prevents rich number colors from shredding the highlight.
                 self.paint_cursor_row(stdscr, y + 3 + offset, x + 2, line, w - 4)
                 continue
-            if not tracing and self.scroll + offset in headers:
+            if not tracing and (
+                line in self._box_headers or self.scroll + offset in self._line_sort_headers
+            ):
                 self._paint_box_header(stdscr, y + 3 + offset, x + 2, line, w - 4)
                 self._register_line_sort_header(
                     y + 3 + offset, x + 2, self.scroll + offset, line, w - 4
@@ -2645,11 +2658,21 @@ class Renderer:
                 elif lvl is not None:
                     attr = curses.color_pair(PRICE_HEAT_BASE_PAIR + lvl) | curses.A_BOLD
             if tracing:
+                if isinstance(line, TraceLine) and line.event is not None:
+                    if line.role in ("tool", "error"):
+                        line = ("▸" if line.event == target else "·") + line[1:]
+                    elif (
+                        line.role == "meta"
+                        and line.event != target
+                        and line.startswith("│  Output ·")
+                    ):
+                        line = " · ".join(line.split(" · ")[:2])
                 # $1 in a shell script is not money, and 1.0M in output is not a token count.
                 self.write(stdscr, y + 3 + offset, x + 2, shorten(line, w - 4), attr)
-                if isinstance(line, TraceLine) and line.event is not None:
+                event = getattr(drawn[offset], "event", None)
+                if event is not None:
                     self._add_rows_region(
-                        "trace-output", y + 3 + offset, x + 2, x + w - 3, line.event, 1
+                        "trace-output", y + 3 + offset, x + 2, x + w - 3, event, 1
                     )
                 continue
             self.write_rich(stdscr, y + 3 + offset, x + 2, shorten(line, w - 4), attr)
@@ -2664,7 +2687,9 @@ class Renderer:
         if current == "Turns":
             self._add_rows_region("turnline", y + 3, x + 2, x + w - 3, self.scroll, len(drawn))
         if not loading_trace:
-            self._paint_scrollbar(stdscr, y + 3, x + w - 1, len(lines), visible, self.scroll)
+            self._paint_scrollbar(
+                stdscr, y + 3, x + w - 1, len(lines) - body_start, visible, self.scroll
+            )
 
     def _scroll_turn_cursor_into_view(self, visible: int) -> None:
         self._scroll_line_into_view(self._turn_cursor_line, visible)
@@ -4299,6 +4324,42 @@ class Renderer:
     _TRACE_PROSE_LINES = 40
 
     def detail_turn_trace(self, workflow: Workflow, width: int) -> list[str]:
+        rows = self.session_turn_rows(workflow.id)
+        idx = self.app.active_trace_drill
+        if not rows or idx is None or not 0 <= idx < len(rows):
+            return []
+        if self.app._trace_loading is not None or self.app._remote_trace_error:
+            return self._build_turn_trace(workflow, width, rows, idx, [])
+        events = self.app.turn_trace_events(workflow.id, rows[idx])
+        full = self.app._trace_full
+        key = (
+            workflow.id,
+            id(rows),
+            len(rows),
+            idx,
+            width,
+            id(events),
+            id(full),
+            self.show_api_prices,
+            self.store.demo,
+            self.app.trace_expanded,
+            frozenset(self.app._trace_open_outputs),
+            self.session_records_reasoning(workflow.id),
+            self._key("main", "select"),
+            workflow.machine,
+        )
+        cached = self._trace_layout_cache
+        if cached is None or cached[0] != key:
+            lines = self._build_turn_trace(workflow, width, rows, idx, events)
+            # Retain source references with one layout, never raw text in the table cache.
+            cached = (key, rows, events, full, lines, self._trace_tool_at, self._trace_output_ends)
+            self._trace_layout_cache = cached
+        self._trace_tool_at, self._trace_output_ends = cached[5:]
+        return cached[4]
+
+    def _build_turn_trace(
+        self, workflow: Workflow, width: int, rows, idx: int, events
+    ) -> list[str]:
         """Render one turn's own content: narration, reasoning, and the calls it made.
 
         The third level under Turns. Turns answers when the money went, the drill which
@@ -4306,15 +4367,12 @@ class Renderer:
         exact arguments included, which is the part no token column can carry.
         """
         self._trace_tool_at = {}
-        rows = self.session_turn_rows(workflow.id)
-        idx = self.app.active_trace_drill
-        if not rows or idx is None or not 0 <= idx < len(rows):
-            return []
+        self._trace_output_ends = []
         siblings = self.app.drilled_turn_indices()
         if idx not in siblings:
             return []
         row = rows[idx]
-        costs = self.turn_costs(rows)
+        cost = self.turn_costs([row])[0]
         pos = siblings.index(idx) + 1
         wrap = max(20, width - 2)
         prefix = f"Turn {pos} of {len(siblings)}"
@@ -4322,7 +4380,7 @@ class Renderer:
         room = max(12, width - display_width(prefix) - 3)
         head = f"{prefix} · {shorten(prompt, room)}"
         model = str(row.get("model_name") or "-").split("/", 1)[-1]
-        meta = f"{model} · {human_tokens(row['tokens_total'])} tokens · {money(costs[idx])} · {(row.get('time') or '--')[5:19]}"
+        meta = f"{model} · {human_tokens(row['tokens_total'])} tokens · {money(cost)} · {(row.get('time') or '--')[5:19]}"
         if row.get("depth"):
             meta += f" · {_turn_agent(row)}"
         remote = self.app.remote_trace_reader(workflow.id) is not None
@@ -4349,7 +4407,6 @@ class Renderer:
                 TraceLine(f"  {self.app._remote_trace_error}", "meta"),
                 TraceLine("  Close and reopen the trace to retry.", "meta"),
             ]
-        events = self.app.turn_trace_events(workflow.id, row)
         if not events:
             # Distinguish "this turn recorded nothing" from an unsupported backend: the
             # tab only offers this level where the store said it could answer.
@@ -4369,23 +4426,8 @@ class Renderer:
                     self._trace_tool_at.update(
                         (line, event_index) for line in range(start, len(lines) - 2)
                     )
+                    self._trace_output_ends.append((len(lines) - 3, event_index))
             lines.append("")
-        target = self.trace_output_target()
-        lines = [
-            TraceLine(("▸" if ln.event == target else "·") + ln[1:], ln.role, ln.event)
-            if isinstance(ln, TraceLine) and ln.role in ("tool", "error") and ln.event is not None
-            else ln
-            for ln in lines
-        ]
-        for i, ln in enumerate(lines):
-            if (
-                isinstance(ln, TraceLine)
-                and ln.event is not None
-                and ln.event != target
-                and ln.role == "meta"
-                and ln.startswith("│  Output ·")
-            ):
-                lines[i] = TraceLine(" · ".join(ln.split(" · ")[:2]), ln.role, ln.event)
         while lines and not lines[-1]:
             lines.pop()
         if not self.app.trace_expanded and len(events) >= TRACE_EVENTS_CAP:
@@ -4413,14 +4455,9 @@ class Renderer:
 
     def trace_output_target(self) -> int | None:
         """The output section at the viewport top, or the next one below it."""
-        return next(
-            (
-                index
-                for line, index in getattr(self, "_trace_tool_at", {}).items()
-                if line >= self.app.scroll
-            ),
-            None,
-        )
+        ends = self._trace_output_ends
+        pos = bisect_left(ends, (self.app.scroll, -1))
+        return ends[pos][1] if pos < len(ends) else None
 
     @staticmethod
     def _trace_wrapped(prefix: str, text: str, cont: str, wrap: int) -> list[str]:
@@ -4622,12 +4659,9 @@ class Renderer:
         rows = self.session_turn_rows(workflow.id)
         if not rows:
             return []
-        costs = self.turn_costs(rows)
-        groups = self.turn_group_rows(rows, costs)
         i = self.app.active_turn_drill
-        if not isinstance(i, int) or not 0 <= i < len(groups):
+        if not isinstance(i, int) or not 0 <= i < len(self.app.turn_runs(workflow.id)):
             return []
-        g = groups[i]
         if self.app.active_trace_drill is not None:
             # Clear FIRST: draw_detail lays a turnline region over whatever this returns,
             # so keeping the drill's map would make the trace's prose clickable and
@@ -4638,6 +4672,9 @@ class Renderer:
             if traced:
                 return traced
             self.app.trace_drill = None
+        costs = self.turn_costs(rows)
+        groups = self.turn_group_rows(rows, costs)
+        g = groups[i]
         # Rebuilt below for THIS level's rows: draw_detail lays one turnline region over
         # whatever the tab drew, and a stale map would make the prompt text clickable.
         self._turn_header_at = {}
