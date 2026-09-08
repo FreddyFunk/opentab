@@ -998,6 +998,64 @@ class ClaudeStore:
         paths = self._transcripts(workflow_id)
         return bool(paths) and not any(self._replays_history(p) for p in paths)
 
+    def node_prompt(self, workflow_id: str, node_id: str) -> str | None:
+        """Read a uniquely owned subagent's initial user message, never its title."""
+        if self.demo or not workflow_id or not node_id or node_id == workflow_id:
+            return None
+        paths = self._transcripts(workflow_id)
+        # Same isolation guard as supports_turn_content, before the content read.
+        if not paths or any(self._replays_history(p) for p in paths):
+            return None
+        items = list(read_files_parallel(paths))
+        if len(items) != len(paths):
+            return None  # a missing sidecar could conceal a colliding runroot
+        s = self._parse_texts(items).get(workflow_id)
+        if s is None:
+            return None
+        roots = {self._side_run_root(s, u) for u in s["side_usage"]}
+        matches = [u for u in roots if str(u)[:8] == node_id]
+        if len(matches) != 1:
+            return None
+        run = matches[0]
+        if not isinstance(run, str) or run not in s["side_uuids"]:
+            return None
+        if s["uuid_parent"].get(run) in s["side_uuids"]:
+            return None  # a cycle has no initial message
+        prompt = None
+        for _path, text in items:
+            for obj in self._records(text):
+                if obj.get("sessionId") != workflow_id:
+                    continue
+                uuid = obj.get("uuid")
+                if uuid and (
+                    obj.get("parentUuid") != s["uuid_parent"].get(uuid)
+                    or (obj.get("isSidechain") is True) != (uuid in s["side_uuids"])
+                ):
+                    return None  # conflicting resumed records cannot prove ownership
+                if uuid != run:
+                    continue
+                # A missing initial user record must not turn a later follow-up or
+                # tool result into the received task. The runroot is authoritative.
+                msg = obj.get("message")
+                if obj.get("type") != "user" or not isinstance(msg, dict):
+                    return None
+                content = msg.get("content")
+                if isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        part = block
+                        if isinstance(block, dict):
+                            part = block.get("text") if block.get("type") == "text" else None
+                        if isinstance(part, str):
+                            parts.append(part)
+                    content = "\n\n".join(parts)
+                if not isinstance(content, str) or not content.strip():
+                    return None
+                if prompt is not None and prompt != content:
+                    return None
+                prompt = content
+        return prompt
+
     def context_breakdown(self, workflow_id: str) -> list[dict]:
         # Estimated composition rows for the Context tab (what filled the window),
         # flattened by util.context_rows; the measured growth curve comes from the
@@ -1063,6 +1121,20 @@ class ClaudeStore:
         s["unpriced_tokens"] = sum(r["tokens_total"] for r in rows)  # all of it is unpriced
         s["subagents"] = self._build_subagents(sid, s)
 
+    @staticmethod
+    def _side_run_root(s: dict, u):
+        if not isinstance(u, str):
+            return u
+        parent, side = s["uuid_parent"], s["side_uuids"]
+        seen, cur = set(), u
+        while True:
+            p = parent.get(cur)
+            if p in side and p not in seen:
+                seen.add(p)
+                cur = p
+            else:
+                return cur
+
     def _build_subagents(self, sid: str, s: dict) -> list[dict]:
         # Group sidechain assistant messages into distinct subagent runs: a run is a
         # maximal chain of sidechain uuids, so walking parentUuid up while still
@@ -1070,21 +1142,9 @@ class ClaudeStore:
         # user has none -- but keeps the subagent tree correct where they exist.
         if not s["side_usage"]:
             return []
-        parent, side = s["uuid_parent"], s["side_uuids"]
-
-        def run_root(u: str) -> str:
-            seen, cur = set(), u
-            while True:
-                p = parent.get(cur)
-                if p in side and p not in seen:
-                    seen.add(p)
-                    cur = p
-                else:
-                    return cur
-
         groups: dict[str, dict[str, dict]] = {}  # run -> model_name -> acc
         for u, (model_name, acc) in s["side_usage"].items():
-            run = run_root(u) if isinstance(u, str) else u
+            run = self._side_run_root(s, u)
             by_model = groups.setdefault(run, {})
             ga = by_model.get(model_name)
             if ga is None:

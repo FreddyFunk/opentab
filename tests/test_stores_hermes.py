@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import tempfile
+from unittest.mock import patch
 
 import opentab as ot
 
@@ -50,6 +51,76 @@ def _hermes_db(path, rows):
     )
     conn.commit()
     conn.close()
+
+
+def test_hermes_node_prompt_reads_full_user_content_without_logs_or_assistant_rows():
+    prompt = "  [Received context]\n\n" + ("  Detailed child instruction.\n" * 30) + "Final line.\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "state.db")
+        _hermes_db(
+            db,
+            [
+                {"id": "root"},
+                {"id": "child", "parent_id": "root", "title": "Misleading short title"},
+                {"id": "sibling", "parent_id": "root"},
+                {"id": "nested", "parent_id": "child"},
+                {"id": "empty", "parent_id": "root", "title": "Not a received prompt"},
+                {"id": "outside"},
+                {"id": "archived", "parent_id": "root", "archived": 1},
+                {"id": "behind-archived", "parent_id": "archived"},
+            ],
+        )
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL)"
+        )
+        conn.executemany(
+            "INSERT INTO messages VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "root", "user", "Root prompt", 1),
+                (2, "child", "user", "Later prompt", 5),
+                (3, "child", "user", None, 1),
+                (4, "child", "user", " \n\t", 2),
+                (5, "child", "system", "System instruction", 1),
+                (6, "child", "user", prompt, 3),
+                (7, "sibling", "user", "Sibling\nprompt", 1),
+                (8, "nested", "user", "Nested prompt", 1),
+                (9, "empty", "user", " \n", 1),
+                (10, "outside", "user", "Outside prompt", 1),
+                (11, "archived", "user", "Archived prompt", 1),
+                (12, "behind-archived", "user", "Unreachable prompt", 1),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        store = ot.HermesStore(db, type("Args", (), {"demo": False})())
+        with patch.object(store, "_log_turns", side_effect=AssertionError("read logs")):
+            assert store.node_prompt("root", "child") == prompt
+            assert store.node_prompt("root", "sibling") == "Sibling\nprompt"
+            assert store.node_prompt("root", "nested") == "Nested prompt"
+        for workflow_id, node_id in (
+            ("root", "root"),
+            ("root", "outside"),
+            ("root", "empty"),
+            ("root", "archived"),
+            ("root", "behind-archived"),
+            ("root", "chil"),
+            ("root", "missing"),
+            ("missing", "child"),
+            ("child", "sibling"),
+        ):
+            assert store.node_prompt(workflow_id, node_id) is None
+        store.demo = True
+        with patch.object(store, "_connect", side_effect=AssertionError("demo read DB")):
+            assert store.node_prompt("root", "child") is None
+
+
+def test_hermes_node_prompt_missing_messages_returns_none():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "state.db")
+        _hermes_db(db, [{"id": "root"}, {"id": "child", "parent_id": "root"}])
+        store = ot.HermesStore(db, type("Args", (), {"demo": False})())
+        assert store.node_prompt("root", "child") is None
 
 
 def test_hermes_store_loads_tokens_and_rolls_up_to_git_root():

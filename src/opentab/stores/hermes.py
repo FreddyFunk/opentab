@@ -1050,6 +1050,35 @@ class HermesStore:
     def _demo_node(self, n: dict) -> dict:
         return scramble_node(n, self.demo_scale, self.demo_cats)
 
+    def node_prompt(self, workflow_id: str, node_id: str) -> str | None:
+        """Read the descendant's received user content without title shortening."""
+        if self.demo or node_id == workflow_id:
+            return None
+        if not any(
+            sid == node_id and depth > 0 for sid, depth, _ in self._subtree_ids(workflow_id)
+        ):
+            return None
+        try:
+            conn = self._connect()
+        except sqlite3.Error:
+            return None
+        try:
+            cols = self._message_cols(conn)
+            key = self._message_key(cols)
+            order = f"timestamp, {key}" if "timestamp" in cols else key
+            for (text,) in conn.execute(
+                "SELECT content FROM messages WHERE session_id = ? AND role = 'user' "
+                f"ORDER BY {order}",
+                [node_id],
+            ):
+                if isinstance(text, str) and text.strip():
+                    return text
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+        return None
+
     def _subtree_ids(self, workflow_id: str) -> list[tuple[str, int, str]]:
         """(session id, depth, agent label) for a root and every session under it.
 

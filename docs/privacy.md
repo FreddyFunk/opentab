@@ -169,3 +169,10 @@ project paths and spend; live session details and fleet JSON can also contain
 arguments/results) and authored notes are absent from web and fleet payloads.
 This does not make those payloads anonymous. TUI CSV exports can include notes.
 `--bind` warns beyond localhost; see [the web browser](web.md#security).
+
+Opening a Subagents execution in the TUI or live browser can additionally read its
+first recorded child user prompt. This read is separate from usage/prefetch, hidden
+in demo, and retained only for the selected execution in memory. These received
+prompts are not added to static HTML, fleet summaries, rollup caches or programmatic
+node output. Anonymous remote nodes cannot fetch them over SSH. The live browser
+binds each request to its current page snapshot to reject stale execution indices.

@@ -89,6 +89,7 @@ from opentab.util import (
     context_compactions,
     context_size,
     fuzzy_score,
+    node_1h_write,
     short_tool_name,
     tool_call_label,
     tool_mix_label,
@@ -215,6 +216,8 @@ class Renderer:
         self._trace_output_ends: list[tuple[int, int]] = []
         # Selected prompt header line, recomputed each paint for scroll/highlight.
         self._turn_cursor_line: int | None = None
+        self._subagent_header_at: dict[int, int] = {}
+        self._subagent_cursor_line: int | None = None
         # Logical header lines become screen-coordinate sort regions during paint.
         self._line_sort_headers: dict[int, tuple[tuple, str]] = {}
         # Models remain plain strings; line-to-row mapping adds selection at paint time.
@@ -733,6 +736,8 @@ class Renderer:
     def _draw(self, stdscr: curses.window) -> None:
         if not self.app._on_turns_tab() or self.app.active_trace_drill is None:
             self.app._clear_trace_expansion()
+        if not self.app._on_subagents_tab() or self.app.active_subagent_drill is None:
+            self.app._clear_subagent_prompt()
         self.apply_background(stdscr)  # theme bg fills the screen (before erase reads it)
         stdscr.erase()
         self.regions = []  # rebuilt for this frame's clicks
@@ -2627,6 +2632,9 @@ class Renderer:
             # Follow is one-shot and must run before the scroll clamp.
             self._scroll_turn_cursor_into_view(visible)
             self.app._turn_follow = False
+        if current == "Subagents" and self.app._subagent_follow:
+            self._scroll_line_into_view(self._subagent_cursor_line, visible)
+            self.app._subagent_follow = False
         loading_trace = tracing and self.app._trace_loading is not None
         if not loading_trace:
             self.app.scroll = max(
@@ -2637,7 +2645,9 @@ class Renderer:
         target = self.trace_output_target() if tracing else None
         for offset, line in enumerate(drawn):
             attr = self.line_attr(line)
-            if current == "Turns" and self.scroll + offset == self._turn_cursor_line:
+            if (current == "Turns" and self.scroll + offset == self._turn_cursor_line) or (
+                current == "Subagents" and self.scroll + offset == self._subagent_cursor_line
+            ):
                 # Select by line index, not a display glyph. paint_cursor_row preserves
                 # gutters and prevents rich number colors from shredding the highlight.
                 self.paint_cursor_row(stdscr, y + 3 + offset, x + 2, line, w - 4)
@@ -2686,6 +2696,8 @@ class Renderer:
             )
         if current == "Turns":
             self._add_rows_region("turnline", y + 3, x + 2, x + w - 3, self.scroll, len(drawn))
+        if current == "Subagents":
+            self._add_rows_region("subagentline", y + 3, x + 2, x + w - 3, self.scroll, len(drawn))
         if not loading_trace:
             self._paint_scrollbar(
                 stdscr, y + 3, x + w - 1, len(lines) - body_start, visible, self.scroll
@@ -3809,60 +3821,271 @@ class Renderer:
         ) + [""]
 
     def detail_subagents(self, workflow: Workflow, width: int) -> list[str]:
+        self._subagent_header_at = {}
+        self._subagent_cursor_line = None
         nodes = self.session_node_rows(workflow.id)
+        rows = self.app.subagent_rows(workflow)
         if not any(row["depth"] > 0 for row in nodes):
             return ["# Subagents", "No subagents used in this workflow."]
+        selected = next((r for r in rows if r["_node_index"] == self.subagent_drill), None)
+        if selected is not None:
+            return self._subagent_detail(selected, nodes, width)
         # Build the chart prefix before registering the table's absolute sort-header line.
         # What-if does not alter the chart's recorded/estimated share.
-        head = self._flamegraph_box(workflow, width)
+        head = self._subagent_wrap(self._flamegraph_box(workflow, width), width)
+        priced = self._priced_nodes(nodes)
+        children = [r for r in priced if r["depth"] > 0]
+        cost = sum(r["cost"] for r in children)
+        tokens = sum(r["tokens_total"] for r in children)
+        summary = [
+            f"{len(children)} executions   {sum(r['depth'] == 1 for r in children)} direct / "
+            f"{sum(r['depth'] > 1 for r in children)} nested   max depth {max(r['depth'] for r in children)}",
+            f"Delegated cost {money(cost)} ({pct(cost, sum(r['cost'] for r in priced))} of tree)   "
+            f"tokens {human_tokens(tokens)} ({pct(tokens, sum(r['tokens_total'] for r in priced))})",
+        ]
+        head += self._sectioned_box(
+            "# Delegation", [self._subagent_wrap(summary, width - self.BOX_CHROME)], width, []
+        ) + [""]
         totals = self.whatif_session_totals(workflow)
         if self.whatif_model and totals:
             # What-if covers the whole tree, including root. Without per-model rows the
             # baseline is unknowable, so retain the ordinary table rather than quote half.
-            return self._subagents_whatif(
-                self.sorted_subagent_rows(self._priced_nodes(nodes)),
+            lines = self._subagents_whatif(
+                rows,
                 self.whatif_model,
                 totals,
                 workflow,
                 width,
                 head,
             )
-        rows = self.sorted_subagent_rows(
-            self._priced_nodes([row for row in nodes if row["depth"] > 0])
-        )
-        header = (
-            f"  {self.subagent_sort_heading('date', 'Started'):<16} "
-            f"{self.subagent_sort_heading('depth', 'D'):<3} "
-            f"{self.subagent_sort_heading('agent', 'Agent'):14} "
-            f"{self.subagent_sort_heading('model', 'Model'):31} "
-            f"{self.subagent_sort_heading('cost', 'Cost'):>8} "
-            f"{self.subagent_sort_heading('tokens', 'Tokens'):>9}  "
-            f"{self.subagent_sort_heading('title', 'Title')}"
-        )
-        body = [
-            f"  {str(row.get('created_at') or '')[:16]:<16} "
-            f"{row['depth']:<3} "
-            f"{pad(shorten(row['agent'], 14), 14)} "
-            f"{pad(shorten(row['model_name'], 31), 31)} "
-            f"{money(row['cost']):>8} "
-            f"{human_tokens(row['tokens_total']):>9}  "
-            f"{row['title']}"
-            for row in rows
-        ]
-        total = None
-        if len(rows) > 1:
-            total = (
-                f"  {pad('TOTAL', 16)} {'':<3} {'':14} {'':31} "
-                f"{money(sum(row['cost'] for row in rows)):>8} "
-                f"{human_tokens(sum(row['tokens_total'] for row in rows)):>9}  "
+        else:
+            lines = head + self._subagent_table(
+                rows, width, len(head), sum(r["cost"] for r in priced)
             )
-        box = self._ruled_box("# Subagent Executions", header, body, total, [], width)
-        # Sort zones use absolute line indices, so derive the chart-prefix offset.
-        self._line_sort_headers[len(head) + self.BOX_HEADER_LINE] = (
+        enter = self.keymap.label("main", "select")
+        lines += self._subagent_wrap(
+            [
+                f"{enter} / click: inspect execution. Shares use node totals, which can differ from session rollups."
+            ],
+            width,
+        )
+        for field, label in (("agent", "Agent"), ("model_name", "Representative model")):
+            groups: dict[str, list[dict]] = {}
+            for row in children:
+                groups.setdefault(str(row.get(field) or "unknown"), []).append(row)
+            extra = width >= 64
+            name_w = max(8, width - self.BOX_CHROME - (42 if extra else 28))
+            header = (
+                f"  {pad(shorten(label, name_w), name_w)} {'Runs':>4} {'Cost':>9} {'Tokens':>9}"
+            )
+            if extra:
+                header += f" {'Share':>6} {'Cache':>6}"
+            body = []
+            for name, group in sorted(
+                groups.items(), key=lambda item: sum(r["cost"] for r in item[1]), reverse=True
+            ):
+                group_cost = sum(r["cost"] for r in group)
+                cache = sum(r.get("tokens_cache_read", 0) for r in group)
+                incoming = sum(
+                    r.get("tokens_input", 0)
+                    + r.get("tokens_cache_read", 0)
+                    + r.get("tokens_cache_write", 0)
+                    for r in group
+                )
+                body.append(
+                    f"  {pad(shorten(name, name_w), name_w)} {len(group):>4} {money(group_cost):>9} "
+                    f"{human_tokens(sum(r['tokens_total'] for r in group)):>9}"
+                    + (
+                        f" {pct(group_cost, sum(r['cost'] for r in priced)):>6} {pct(cache, incoming):>6}"
+                        if extra
+                        else ""
+                    )
+                )
+            lines += [""] + self._ruled_box(f"# By {label.lower()}", header, body, None, [], width)
+        lines += self._subagent_wrap(
+            [
+                "Model groups use each execution's representative model, not an exact model split. Cache = reads / (input + cache reads + cache writes)."
+            ],
+            width,
+        )
+        return lines
+
+    @staticmethod
+    def _subagent_wrap(lines: list[str], width: int) -> list[str]:
+        return [
+            wrapped
+            for line in lines
+            for part in line.splitlines() or [""]
+            for wrapped in (
+                [part] if display_width(part) <= width else wrap_cells(part, max(1, width))
+            )
+            or [""]
+        ]
+
+    def _subagent_table(
+        self, rows: list[dict], width: int, offset: int, tree_cost: float, target: str = ""
+    ) -> list[str]:
+        # Protect the title and accounting at small widths; full metadata is in the drill.
+        columns = [("cost", "Cost", 9), ("tokens", "Tokens", 9)]
+        if target:
+            columns.insert(1, ("whatif", "What-if", 9))
+        if width >= 90:
+            columns = [("date", "Started", 16), ("depth", "D", 3), ("agent", "Agent", 12)] + columns
+        if width >= 120:
+            columns.insert(3, ("model", "Model", min(26, max(14, width - 116))))
+        if width >= 145:
+            columns += [("share", "Share", 6), ("cache", "Cache", 6)]
+        title_w = max(1, width - self.BOX_CHROME - 2 - sum(size + 1 for _, _, size in columns))
+        header = "  " + " ".join(
+            pad(shorten(self.subagent_sort_heading(key, label), size), size)
+            for key, label, size in columns
+        )
+        header += " " + self.subagent_sort_heading("title", "Title")
+        body = []
+        total_cost = sum(row["cost"] for row in rows)
+        for row in rows:
+            incoming = sum(
+                row.get("tokens_" + key, 0) for key in ("input", "cache_read", "cache_write")
+            )
+            values = {
+                "date": str(row.get("created_at") or "")[:16],
+                "depth": str(row["depth"]),
+                "agent": str(row.get("agent") or "unknown"),
+                "model": str(row.get("model_name") or "unknown"),
+                "cost": money(row["cost"]),
+                "tokens": human_tokens(row["tokens_total"]),
+                "whatif": money(self.whatif_node_price(row, target)) if target else "",
+                "share": pct(row["cost"], tree_cost),
+                "cache": pct(row.get("tokens_cache_read", 0), incoming),
+            }
+            body.append(
+                "  "
+                + " ".join(
+                    f"{values[key]:>{size}}"
+                    if key in ("cost", "tokens", "whatif", "share", "cache")
+                    else pad(shorten(values[key], size), size)
+                    for key, _, size in columns
+                )
+                + " "
+                + shorten(str(row.get("title") or "(untitled)"), title_w)
+            )
+        title = f"# Session Tree · what-if {target}" if target else "# Subagent Executions"
+        total = None
+        if len(rows) > 1 and not target:
+            values = {
+                "cost": money(total_cost),
+                "tokens": human_tokens(sum(r["tokens_total"] for r in rows)),
+            }
+            total = "  " + " ".join(
+                f"{values.get(key, ''):>{size}}"
+                if key in values
+                else pad("TOTAL" if i == 0 else "", size)
+                for i, (key, _, size) in enumerate(columns)
+            )
+            if columns[0][0] == "cost":
+                total += " TOTAL"
+        box = self._ruled_box(title, header, body, total, [], width)
+        start = offset + (self._ruled_body_start or 0)
+        self._subagent_header_at = {start + i: i for i in range(len(rows))}
+        if rows:
+            cursor = self.app.subagent_cursor(rows)
+            self.app._subagent_selected = rows[cursor]["_node_index"]
+            self._subagent_cursor_line = start + cursor
+        self._line_sort_headers[offset + self.BOX_HEADER_LINE] = (
             self.SUBAGENT_SORT_COLUMNS,
             "subagent",
         )
-        return head + box
+        return box
+
+    def _subagent_detail(self, row: dict, nodes: list[dict], width: int) -> list[str]:
+        priced = self._priced_nodes(nodes)
+        children = [r for r in priced if r["depth"] > 0]
+        inner = max(1, width - self.BOX_CHROME)
+        back = self.keymap.label("main", "back")
+        title = str(row.get("title") or "(untitled)")
+        meta = [
+            f"Agent: {row.get('agent') or 'unknown'}   Depth: {row['depth']}",
+            f"Representative model: {row.get('model_name') or 'unknown'}",
+            f"Started: {row.get('created_at') or 'not recorded'}",
+        ]
+        lines = self._subagent_wrap(
+            [f"# Subagent execution   {back}: back to executions", ""], width
+        )
+        lines += self._sectioned_box("# Title", [self._subagent_wrap([title], inner)], width, [])
+        prompt = self.app.subagent_prompt_text()
+        lines += [""] + self._sectioned_box(
+            "# Received prompt",
+            [self._trace_block(prompt, "", inner, len(prompt.splitlines()))],
+            width,
+            self._subagent_wrap(
+                [
+                    "First recorded child user message, not its title or the full system/context payload."
+                ],
+                width,
+            ),
+        )
+        lines += [""] + self._sectioned_box(
+            "# Execution", [self._subagent_wrap(meta, inner)], width, []
+        )
+        total_cost = sum(r["cost"] for r in priced)
+        child_cost = sum(r["cost"] for r in children)
+        spend = [
+            f"{'API-equivalent' if self.show_api_prices and not self.store.demo else 'Recorded'} cost: {money(row['cost'])}",
+            f"Share of tree: {pct(row['cost'], total_cost)} cost / {pct(row['tokens_total'], sum(r['tokens_total'] for r in priced))} tokens",
+        ]
+        if row["depth"] > 0:
+            rank = 1 + sum(r["cost"] > row["cost"] for r in children)
+            spend.append(
+                f"Delegated spend: {pct(row['cost'], child_cost)}   Cost rank: {rank} of {len(children)}"
+            )
+        if self.whatif_model:
+            spend.append(
+                f"All tokens at {self.whatif_model}: {money(self.whatif_node_price(row, self.whatif_model))}"
+            )
+        lines += [""] + self._sectioned_box(
+            "# Contribution", [self._subagent_wrap(spend, inner)], width, []
+        )
+        categories = [
+            ("Input", "input", 0),
+            ("Output", "output", 1),
+            ("Reasoning", "reasoning", 2),
+            ("Cache read", "cache_read", 3),
+            ("Cache write", "cache_write", 4),
+        ]
+        values = [
+            (label, int(row.get("tokens_" + key, 0)), slot) for label, key, slot in categories
+        ]
+        category_total = sum(value for _, value, _ in values)
+        chart = []
+        if category_total:
+            chart = [self._token_stack_line(values, category_total, inner)]
+            chart += self._token_legend_lines(
+                [(label, value, 0, slot) for label, value, slot in values], inner
+            )
+        token_rows = [
+            f"{label:<12} {value:>16,}  {pct(value, category_total):>6}"
+            for label, value, _ in values
+        ]
+        if node_1h_write(row):
+            token_rows.append(f"  of writes, 1h: {node_1h_write(row):,}")
+        token_rows.append(f"Recorded total: {row['tokens_total']:,}")
+        incoming = sum(
+            row.get("tokens_" + key, 0) for key in ("input", "cache_read", "cache_write")
+        )
+        token_rows.append(
+            f"Cache hit: {pct(row.get('tokens_cache_read', 0), incoming)} of incoming tokens"
+        )
+        lines += [""] + self._sectioned_box(
+            "# Token breakdown", [chart, self._subagent_wrap(token_rows, inner)], width, []
+        )
+        lines += self._subagent_wrap(
+            [
+                "Shares use node totals, not session rollups. Token category shares use their sum; recorded totals can differ. The 1h cache-write count is a subset, not extra tokens.",
+                "The model is representative: an execution can switch models. No per-node savings baseline, duration, status, or turn ownership is inferred.",
+            ],
+            width,
+        )
+        return lines
 
     @staticmethod
     def signed_pct(part: float, whole: float, sign: str) -> str:
@@ -3913,35 +4136,10 @@ class Renderer:
         # from session per-model rows, with both TOTAL sides priced at list rates.
         priced = [(row, self.whatif_node_price(row, target)) for row in rows]
         prefix = list(head or [])
-        header = (
-            f"  {self.subagent_sort_heading('date', 'Started'):<16} "
-            f"{self.subagent_sort_heading('depth', 'D'):<3} "
-            f"{self.subagent_sort_heading('agent', 'Agent'):14} "
-            f"{self.subagent_sort_heading('model', 'Model'):26} "
-            f"{self.subagent_sort_heading('cost', 'Cost'):>9} "
-            f"{'What-if':>9} "
-            f"{self.subagent_sort_heading('tokens', 'Tokens'):>9}  "
-            f"{self.subagent_sort_heading('title', 'Title')}"
-        )
-        body = [
-            f"  {str(row.get('created_at') or '')[:16]:<16} "
-            f"{row['depth']:<3} "
-            f"{pad(shorten(row['agent'], 14), 14)} "
-            f"{pad(shorten(row['model_name'], 26), 26)} "
-            f"{money(row['cost']):>9} "
-            f"{money(wi):>9} "
-            f"{human_tokens(row['tokens_total']):>9}  "
-            f"{row['title']}"
-            for row, wi in priced
-        ]
         # Do not add a column TOTAL: recorded Cost intentionally differs from the exact
         # list-rate session footer below.
-        lines = prefix + self._ruled_box(
-            f"# Session Tree · what-if {target}", header, body, None, [], width
-        )
-        self._line_sort_headers[len(prefix) + self.BOX_HEADER_LINE] = (
-            self.SUBAGENT_SORT_COLUMNS,
-            "subagent",
+        lines = prefix + self._subagent_table(
+            rows, width, len(prefix), sum(r["cost"] for r in rows), target
         )
         actual, total = totals
         # Sign from the target's point of view.

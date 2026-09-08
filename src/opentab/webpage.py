@@ -218,6 +218,9 @@ td.grow{white-space:normal;overflow-wrap:anywhere;min-width:160px}
 tbody tr.rowlink{cursor:pointer}
 tbody tr.rowlink:hover{background:var(--panel2)}
 tbody tr.rowlink:hover td:first-child{box-shadow:inset 2px 0 var(--accent)}
+tbody tr.rowlink:focus{outline:2px solid var(--accent);outline-offset:-2px;background:var(--panel2)}
+.execution-detail .meta{grid-template-columns:auto minmax(0,1fr);margin:14px 0}
+.execution-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .m{color:var(--good)}
 .m-zero{color:var(--bad)}
 .mut{color:var(--mut)}
@@ -643,6 +646,8 @@ function openSession(id) {
 function resetScopeState() {
   FILTER = '';
   EXPANDED.clear();
+  NODE_DRILL = null;
+  clearNodePrompt();
   const back = !!RETURN && location.hash === RETURN.from;
   MSUB = back ? RETURN.msub : null;
   if (back) TAB = RETURN.tab;
@@ -666,6 +671,9 @@ const EXPANDED = new Set();
 const VIEW = { calYear: null };
 // Prompt ids may repeat, so a drill is an ordinal valid only for the loaded session.
 let TURN_DRILL = null;
+// Payload indices, never titles or representative models, identify executions.
+let NODE_DRILL = null;
+let NODE_PROMPT = null;
 let EXTRAS = { id: null, loading: false, turns: [], tools: [], context: null, expiries: [] };
 const TREND_TABS = ['Daily', 'Weekly', 'Monthly', 'Calendar', 'Models', 'Providers', 'Projects', 'Harnesses'].concat(META.machines ? ['Machines'] : []);
 let TRENDS = { open: false, tab: 'Daily', monthIdx: 0, weekIdx: 0, yearIdx: 0, drill: null, drillTab: null, sort: 'cost', desc: true };
@@ -992,10 +1000,27 @@ function table(id, cols, rows, opts = {}) {
       render(false);
     },
   }, c.label, st && st.key === c.key ? (st.desc ? ' ▾' : ' ▴') : '')));
-  const body = shown.map(r => h('tr',
-    opts.onRow ? { class: 'rowlink', onclick: () => opts.onRow(r) } : null,
-    cols.map(c => h('td', { class: [c.align === 'r' ? 'r' : '', c.cls || ''].join(' ').trim() || null },
-      c.fmt ? c.fmt(r) : String(r[c.key] ?? '')))));
+  const body = shown.map(r => {
+    const row = h('tr',
+      opts.onRow ? { class: 'rowlink', onclick: () => opts.onRow(r) } : null,
+      cols.map(c => h('td', { class: [c.align === 'r' ? 'r' : '', c.cls || ''].join(' ').trim() || null },
+        c.fmt ? c.fmt(r) : String(r[c.key] ?? ''))));
+    if (opts.rowLabel && opts.onRow) {
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-label', opts.rowLabel(r));
+      row.addEventListener('keydown', e => {
+        if (e.metaKey || e.ctrlKey || e.altKey || STARTUP_WARNINGS.length || WHATS_NEW_OPEN || THEMEPICK
+            || WHATIF.open || PRICES.open || TRENDS.open || RANGE.pick) return;
+        if (e.key === 'Tab') { e.stopPropagation(); return; }
+        if (e.key === 'Enter' || e.key === ' ') opts.onRow(r);
+        else if (e.key === 'j' || e.key === 'ArrowDown') row.nextElementSibling?.focus();
+        else if (e.key === 'k' || e.key === 'ArrowUp') row.previousElementSibling?.focus();
+        else return;
+        e.preventDefault(); e.stopPropagation();
+      });
+    }
+    return row;
+  });
   const toggle = sorted.length > collapse
     ? h('button', { class: 'showall', onclick: () => { open ? EXPANDED.delete(id) : EXPANDED.add(id); render(false); } },
         open ? '▴ show top ' + collapse : '▾ show all ' + sorted.length)
@@ -2088,28 +2113,141 @@ function contextCompTable(comp) {
 const signedPct = (part, whole, sign) => { const s = pct(Math.abs(part), whole); return s === '-' ? s : sign + s; };
 // Per-node target cost is exact, but a dominant-model node cannot provide an exact
 // baseline. Keep the comparison and delta at session level over per-model rows.
-function whatifTree(nodes, t) {
-  const rates = WI_PRICE.get(t.target);
-  const rows = nodes.map(n => Object.assign({}, n, { wi: whatifCost(n.tok, rates) }));
-  const saved = t.actual - t.whatif;
-  const tbl = table('t-s-whatif', [
-    { key: 'title', label: 'Title', asc: true, cls: 'grow', fmt: r => [r.depth ? h('span', { class: 'mut' }, '└ '.padStart(r.depth * 2 + 2, ' ')) : null, r.title] },
-    { key: 'date', label: 'Started', fmt: r => h('span', { class: 'dim' }, dt(r.date)) },
-    { key: 'agent', label: 'Agent', asc: true, fmt: r => h('span', { class: 'dim' }, r.agent) },
-    { key: 'model', label: 'Model', asc: true, fmt: r => modelCell(r.model) },
+function executionTable(nodes, t) {
+  const total = sum(nodes, mCost);
+  const rows = nodes.map((n, index) => ({ ...n, index,
+    wi: t ? whatifCost(n.tok, WI_PRICE.get(t.target)) : 0 }));
+  return table('t-s-nodes', [
+    { key: 'index', label: '#', asc: true, align: 'r', fmt: r => r.index + 1 },
+    { key: 'title', label: 'Execution', asc: true, cls: 'grow',
+      fmt: r => h('span', { class: 'execution-title', title: r.title || null }, r.title || '(untitled)') },
+    { key: 'depth', label: 'Depth', asc: true, align: 'r', fmt: r => r.depth || '0 (root)' },
+    { key: 'date', label: 'Started', fmt: r => h('span', { class: 'dim' }, dt(r.date) || '-') },
+    { key: 'agent', label: 'Agent', asc: true, fmt: r => h('span', { class: 'dim' }, r.agent || '-') },
+    { key: 'model', label: 'Model', asc: true, fmt: r => modelCell(r.model || '-') },
     { key: 'cost', label: 'Cost', align: 'r', sortVal: mCost, fmt: r => moneyCell(mCost(r)) },
-    { key: 'wi', label: 'What-if', align: 'r', fmt: r => h('span', { class: 'm' }, money(r.wi)) },
+    { key: 'share', label: 'Share', align: 'r', sortVal: mCost, fmt: r => pct(mCost(r), total) },
+    ...(t ? [{ key: 'wi', label: 'What-if', align: 'r', fmt: r => moneyCell(r.wi) }] : []),
     { key: 'tokens', label: 'Tokens', align: 'r', fmt: r => hTok(r.tokens) },
-  ], rows, { defaultSort: { key: 'date', desc: false } });
+  ], rows, { defaultSort: { key: 'index', desc: false },
+    rowLabel: r => 'Open execution ' + (r.index + 1) + ': ' + (r.title || '(untitled)'),
+    onRow: r => openExecution(r.index) });
+}
+function openExecution(index) {
+  // Reload/range reset can show the list while the current history entry still holds a drill.
+  if (history.state && history.state.session === curScope().id)
+    history.replaceState(null, '', location.hash);
+  NODE_DRILL = index;
+  history.pushState({ execution: index, session: curScope().id }, '', location.hash);
+  requestNodePrompt();
+  render(false);
+}
+function closeExecution() {
+  clearNodePrompt();
+  if (history.state && history.state.session === curScope().id && history.state.execution === NODE_DRILL)
+    history.back();
+  else { NODE_DRILL = null; render(false); }
+}
+function clearNodePrompt() {
+  if (NODE_PROMPT) NODE_PROMPT.controller.abort();
+  NODE_PROMPT = null;
+}
+function requestNodePrompt() {
+  clearNodePrompt();
+  const sc = curScope(), index = NODE_DRILL, snapshot = META.nodeSnapshot;
+  if (!META.serve || META.demo || !snapshot || sc.kind !== 's' || TAB !== 'Subagents'
+      || !Number.isInteger(index) || !(DATA.nodes[sc.id] || [])[index]) return;
+  const request = { session: sc.id, index, snapshot, loading: true, text: null, error: null,
+    controller: new AbortController() };
+  NODE_PROMPT = request;
+  const current = () => NODE_PROMPT === request && !META.demo && META.serve
+    && META.nodeSnapshot === snapshot && curScope().kind === 's' && curScope().id === sc.id
+    && NODE_DRILL === index && TAB === 'Subagents';
+  fetch('/api/node-prompt?' + new URLSearchParams({ session: sc.id, node: index, snapshot }),
+    { signal: request.controller.signal, cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error('Prompt unavailable');
+      return r.json();
+    }).then(x => {
+      if (!current()) return;
+      request.loading = false;
+      request.text = x && typeof x.text === 'string' ? x.text : null;
+      request.error = x && x.error === 'Page snapshot expired. Refresh the page.' ? x.error : null;
+      render(false);
+    }).catch(() => {
+      if (!current()) return;
+      request.loading = false;
+      render(false);
+    });
+}
+function delegationPane(nodes) {
+  const kids = nodes.filter(n => n.depth > 0);
+  const total = sum(nodes, mCost), tokens = sum(nodes, n => n.tokens);
+  const grouped = [...groupBy(kids, n => (n.agent || '').trim() || '-')].map(([agent, rows]) => ({
+    agent, count: rows.length, nested: rows.filter(n => n.depth > 1).length,
+    cost: sum(rows, mCost), tokens: sum(rows, n => n.tokens) }));
+  return pane('Delegation overview', tiles([
+    ['delegated executions', kids.length, nodes.length + ' executions including root'],
+    ['direct / nested', kids.filter(n => n.depth === 1).length + ' / ' + kids.filter(n => n.depth > 1).length],
+    ['max depth', nodes.reduce((max, n) => Math.max(max, n.depth), 0)],
+    ['delegated cost', money(sum(kids, mCost)), pct(sum(kids, mCost), total) + ' of node cost', true],
+    ['delegated tokens', hTok(sum(kids, n => n.tokens)), pct(sum(kids, n => n.tokens), tokens) + ' of node tokens'],
+  ]), h('div', { class: 'hint' }, 'Shares use the sum of all node metrics, including root, not session rollups. '
+    + 'Cost mode: ' + (MODE === 'api' ? 'API-equivalent' : 'recorded') + '. Direct = depth 1; nested = depth > 1.'),
+    table('t-s-agents', [
+      { key: 'agent', label: 'Delegated agent', asc: true, cls: 'grow' },
+      { key: 'count', label: 'Executions', align: 'r' },
+      { key: 'nested', label: 'Nested', align: 'r' },
+      { key: 'cost', label: 'Cost', align: 'r', fmt: r => moneyCell(r.cost) },
+      { key: 'share', label: 'Share', align: 'r', sortVal: r => r.cost, fmt: r => pct(r.cost, total) },
+      { key: 'tokens', label: 'Tokens', align: 'r', fmt: r => hTok(r.tokens) },
+    ], grouped, { defaultSort: { key: 'cost', desc: true } }));
+}
+function executionDetail(nodes, index, t) {
+  const n = nodes[index], tok = n.tok;
+  const exact = v => v.toLocaleString('en-US');
+  const fields = [
+    ['agent', n.agent || '-'], ['representative model', n.model || '-'],
+    ['started', n.date || '-'], ['depth', n.depth + (n.depth === 0 ? ' (root)' : '')],
+    [MODE === 'api' ? 'API-equivalent cost' : 'recorded cost', money(mCost(n))],
+    ['cost share', pct(mCost(n), sum(nodes, mCost)) + ' of all nodes'],
+    ['token share', pct(n.tokens, sum(nodes, r => r.tokens)) + ' of all nodes'],
+    ...TOK_TYPES.map((label, i) => [label, exact(tok[i])]),
+    ['recorded total tokens', exact(n.tokens)],
+    ['cache hit', pct(tok[3], tok[0] + tok[3] + tok[4]) + ' (read / (input + read + write))'],
+  ];
+  if (tok[5]) fields.push(['1h cache write', exact(tok[5]) + ' (subset of cache write)']);
+  if (t) fields.push(['what-if at ' + t.target, money(whatifCost(tok, WI_PRICE.get(t.target)))]);
+  return pane('Execution ' + (index + 1) + ' of ' + nodes.length,
+    h('div', { class: 'execution-detail' },
+      h('button', { class: 'hbtn', onclick: closeExecution }, 'Back to executions (Esc)'),
+      h('h3', null, 'Title'),
+      h('div', { class: 'prompt-full' }, n.title || '(untitled)'),
+      h('h3', null, 'Received prompt'),
+      h('div', { class: 'hint' }, 'First recorded user message in this execution (the child for a subagent), '
+        + 'not the complete system/context payload.'),
+      h('div', { class: 'prompt-full', 'aria-live': 'polite' },
+        !META.serve ? 'Received prompt not available in static reports.'
+        : META.demo ? 'Received prompt not available in demo mode.'
+        : NODE_PROMPT && NODE_PROMPT.loading ? 'Loading received prompt...'
+        : NODE_PROMPT && NODE_PROMPT.text !== null ? NODE_PROMPT.text
+        : (NODE_PROMPT && NODE_PROMPT.error) || 'Received prompt not available for this execution.'),
+      h('dl', { class: 'meta' }, fields.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
+      h('div', { class: 'hint' }, 'The model is representative: an execution may use multiple models. '
+        + 'It cannot provide an exact list-rate baseline; model comparisons stay at session level. '
+        + 'Recorded total tokens are preserved, not recomputed from categories.')));
+}
+function whatifTree(nodes, t) {
+  const saved = t.actual - t.whatif;
+  const tbl = executionTable(nodes, t);
   // Node rollups can disagree with message totals; the per-model TOTAL remains canonical.
-  const wiColumn = rows.reduce((a, r) => a + r.wi, 0);
+  const wiColumn = sum(nodes, n => whatifCost(n.tok, WI_PRICE.get(t.target)));
   const drift = Math.abs(wiColumn - t.whatif) > 0.01 ? (wiColumn > t.whatif ? 'more' : 'less') : '';
   return h('div', null, tbl,
     h('div', { class: 'wi-total' }, 'TOTAL (list rates)  your models ', (t.est ? '~' : '') + money(t.actual), ' → all at ' + t.target + ' ',
       h('b', null, money(t.whatif)), '   ', (saved >= 0 ? 'saved ' : 'cost '),
       h('span', { class: saved >= 0 ? 'wi-down' : 'wi-up' }, money(Math.abs(saved))),
       ' (' + pct(Math.abs(saved), t.actual) + ')'),
-    h('div', { class: 'hint' }, 'both sides priced at list rates — the only apples-to-apples basis. The Cost column is what was actually recorded ($0 where a subscription recorded none), so it does not add up to these.'),
+    h('div', { class: 'hint' }, 'both sides priced at list rates — the only apples-to-apples basis. The Cost column follows $ (recorded or API-equivalent), independently of this comparison.'),
     h('div', { class: 'hint' }, 'no per-node Δ: a node can mix models, so its baseline isn’t computable — the exact comparison exists at session level, where the tokens are split per model.'),
     t.est ? h('div', { class: 'hint' }, '~ your models include one with no known list rate — its tokens are priced at a generic estimate, so the baseline is not a real list price.') : null,
     drift ? h('div', { class: 'hint' }, 'this session’s node totals disagree with its message totals, so the What-if column adds up to slightly ' + drift + ' than the TOTAL. The TOTAL is the exact one.') : null);
@@ -2334,6 +2472,10 @@ function renderSessionOverview(root, sc) {
     root.appendChild(h('div', { class: 'hint' }, 'the per-turn timeline, tool attribution and context curve are fetched live — run: opentab --serve'));
 }
 function renderDetail(sc, ws) {
+  if (NODE_PROMPT && TAB !== 'Subagents') NODE_DRILL = null;
+  if (NODE_PROMPT && (META.demo || !META.serve || sc.kind !== 's' || sc.id !== NODE_PROMPT.session
+      || NODE_DRILL !== NODE_PROMPT.index || META.nodeSnapshot !== NODE_PROMPT.snapshot || TAB !== 'Subagents'))
+    clearNodePrompt();
   const root = document.getElementById('view');
   root.querySelectorAll('.tool-map').forEach(el => el._resizeObserver?.disconnect());
   root.textContent = '';
@@ -2360,17 +2502,15 @@ function renderDetail(sc, ws) {
     const nodes = DATA.nodes[sc.id];
     const tree = nodes && nodes.some(n => n.depth > 0);
     const wi = tree ? whatifTotals(sc.id) : null;
+    if (tree && NODE_DRILL != null && nodes[NODE_DRILL]) {
+      root.appendChild(executionDetail(nodes, NODE_DRILL, wi)); return;
+    }
+    if (tree) root.appendChild(delegationPane(nodes));
     if (tree) { const fl = flamePane(nodes); if (fl) root.appendChild(fl); }
     if (!tree) root.appendChild(pane('Session tree', h('div', { class: 'hint' }, 'no subagents in this session')));
     else if (wi) root.appendChild(pane('Session tree · what-if ' + wi.target, whatifTree(nodes, wi)));
-    else root.appendChild(pane('Session tree', table('t-s-nodes', [
-      { key: 'title', label: 'Title', asc: true, cls: 'grow', fmt: r => [r.depth ? h('span', { class: 'mut' }, '└ '.padStart(r.depth * 2 + 2, ' ')) : null, r.title] },
-      { key: 'date', label: 'Started', fmt: r => h('span', { class: 'dim' }, dt(r.date)) },
-      { key: 'agent', label: 'Agent', asc: true, fmt: r => h('span', { class: 'dim' }, r.agent) },
-      { key: 'model', label: 'Model', asc: true, fmt: r => modelCell(r.model) },
-      { key: 'cost', label: 'Cost', align: 'r', sortVal: mCost, fmt: r => moneyCell(mCost(r)) },
-      { key: 'tokens', label: 'Tokens', align: 'r', fmt: r => hTok(r.tokens) },
-    ], nodes)));
+    else root.appendChild(pane('Session tree', executionTable(nodes, null)));
+    if (tree) root.appendChild(h('div', { class: 'hint' }, 'Click an execution for detail; focus a row and use j/k or arrows, then Enter. Model labels are representative, not a full model mix.'));
   } else if (TAB === 'Turns') root.appendChild(pane('Turns · cost over time',
     EXTRAS.loading ? h('div', { class: 'hint' }, 'loading turns…') : turnsTable(EXTRAS.turns, EXTRAS.expiries)));
   else if (TAB === 'Tools') root.appendChild(pane('Tools',
@@ -3055,6 +3195,7 @@ document.addEventListener('keydown', e => {
     if (next !== list.index) list.rows[next].go();
     e.preventDefault();
   } else if (e.key === 'Tab') {
+    if (sc.kind === 's' && TAB === 'Subagents') return; // Native focus reaches execution rows and Back.
     const order = focusOrder();
     const cur = order.indexOf(FOCUS);
     FOCUS = order[((cur < 0 ? 0 : cur) + (e.shiftKey ? -1 : 1) + order.length) % order.length];
@@ -3066,6 +3207,7 @@ document.addEventListener('keydown', e => {
     TAB = tabs[(i + step + tabs.length) % tabs.length];
     render(false);
   } else if (e.key === 'Escape') {
+    if (NODE_DRILL != null && TAB === 'Subagents') { closeExecution(); e.preventDefault(); return; }
     // Escape leaves a visible prompt drill before popping the route scope.
     if (TURN_DRILL != null && TAB === 'Turns') { TURN_DRILL = null; render(false); e.preventDefault(); return; }
     if (MSUB) { clearMsub(); e.preventDefault(); return; }
@@ -3131,6 +3273,14 @@ document.getElementById('themepick').addEventListener('click', closeTheme);
 document.getElementById('whats-new').addEventListener('click', closeWhatsNew);
 // Route changes clear scope-local state; render preserves only tabs valid in the new scope.
 window.addEventListener('hashchange', () => { resetScopeState(); render(); });
+// Same-URL history entries let browser Back close an execution without leaving its session.
+window.addEventListener('popstate', e => {
+  const sc = curScope(), state = e.state;
+  NODE_DRILL = sc.kind === 's' && state && state.session === sc.id && Number.isInteger(state.execution)
+    ? state.execution : null;
+  requestNodePrompt();
+  render(false);
+});
 // Apply persisted or payload theme before charts render.
 applyTheme((function () { try { return localStorage.getItem('opentab-theme'); } catch (e) { return null; } })() || META.theme || 'tokyo-night');
 render();

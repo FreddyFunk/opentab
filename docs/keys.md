@@ -51,6 +51,23 @@ compaction.
 | `z` | Inside a turn, expand its full recorded content / collapse to the preview |
 | Mouse | Wheel scrolls · click selects (anywhere in the preview pane focuses it) · double-click drills · click a tab, or a column header to sort (again to reverse). Inside a turn, click a tool header or result to expand / collapse that output independently |
 
+On **Subagents**, `j`/`k` select an execution, `g`/`G` jump to the first/last,
+and `Enter` or a click opens its full title, received prompt, metadata, contribution
+and exact token/cache breakdown. `Esc` returns to the execution list. The overview adds
+delegation counts and shares, plus summaries by agent and representative model.
+Narrow terminals hide optional table columns; the execution detail retains them.
+Shares use summed node metrics, which can differ from session rollups. Models
+are representative, not proof that an execution used only one model.
+
+**Received prompt** reads the selected child's first recorded user message, separately
+from its generated title. OpenCode, Claude Code, Codex, OMP and Hermes support this
+when the message and exact child identity are retained. It is not the complete
+system instructions or inherited context. Missing/ambiguous records and unsupported
+harnesses are labeled explicitly; demo hides real prompts. The read happens only
+after opening the execution, and its text is released when you leave the detail.
+Subagent turns remain interleaved in the session's **Turns** tab; there is not yet
+an execution-specific Turns drill inside Subagents.
+
 On the Turns tab, `j`/`k` select a prompt and `Enter` (or a click) opens its full
 text and per-turn rows; `g`/`G` jump to the first/last prompt. Inside a prompt,
 `j`/`k` select a turn and `Enter` opens its recorded content. The Content column

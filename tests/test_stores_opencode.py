@@ -21,6 +21,84 @@ from tests._support import (
 )
 
 
+def test_opencode_node_prompt_reads_all_text_parts_from_the_exact_child():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "opencode.db")
+        _write_opencode_db_with_turns(db)
+        conn = sqlite3.connect(db)
+        conn.executemany(
+            "insert into session values (?,?,?,?,?,?)",
+            [
+                ("s3", "s1", "Explore", "/work/repo", "explore", 1760000000000),
+                ("s4", None, "Unrelated", "/elsewhere", "explore", 1760000000000),
+                ("s5", "s2", "Nested", "/work/repo", "explore", 1760000000000),
+            ],
+        )
+        prompts = [
+            ("later", "s2", 1900, ["A later follow-up, not the initial task"]),
+            (
+                "child",
+                "s2",
+                800,
+                [
+                    "Inspect the parser.\n\n  Preserve this indentation.",
+                    "Second block " + "full instructions " * 50 + "END",
+                ],
+            ),
+            ("sibling", "s3", 800, ["The sibling's distinct instructions"]),
+            ("outside", "s4", 800, ["Unrelated private prompt"]),
+            ("nested", "s5", 800, ["Nested instructions"]),
+        ]
+        for mid, sid, ts, texts in prompts:
+            conn.execute(
+                "insert into message values (?,?,?)",
+                (
+                    mid,
+                    sid,
+                    json.dumps(
+                        {
+                            "role": "user",
+                            "time": {"created": ts},
+                            "summary": {"title": "Misleading short title"},
+                        }
+                    ),
+                ),
+            )
+            for i, text in enumerate(texts):
+                conn.execute(
+                    "insert into part values (?,?,?,?)",
+                    (f"{mid}-{i}", mid, sid, json.dumps({"type": "text", "text": text})),
+                )
+        conn.commit()
+        conn.close()
+        store = ot.Store(db, type("A", (), {"demo": False})())
+        assert store.node_prompt("s1", "s2") == "\n\n".join(prompts[1][3])
+        assert store.node_prompt("s1", "s3") == prompts[2][3][0]  # no assistant or usage required
+        assert store.node_prompt("s1", "s5") == "Nested instructions"
+        for root, child in (
+            ("s1", "s4"),
+            ("s2", "s3"),
+            ("missing", "s2"),
+            ("s1", "s1"),
+            ("s1", "missing"),
+        ):
+            assert store.node_prompt(root, child) is None
+        store.demo = True
+        store.conn.close()  # demo guard must run before any SQL/content read
+        assert store.node_prompt("s1", "s2") is None
+
+
+def test_opencode_node_prompt_never_falls_back_to_summary_or_title():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = os.path.join(tmp, "opencode.db")
+        _write_opencode_db_with_turns(db)
+        store = ot.Store(db, type("A", (), {"demo": False})())
+        assert store.node_prompt("s1", "s2") is None
+        store.supports_tool_breakdown = False
+        store.conn.close()
+        assert store.node_prompt("s1", "s2") is None
+
+
 def test_reconcile_makes_models_sum_to_session_total():
     app = ot.App.__new__(ot.App)
 

@@ -236,6 +236,8 @@ def _enter_opens_something(app: App) -> bool:
         return app.active_turn_drill is None or (
             wf is not None and app.session_supports_trace(wf.id)
         )
+    if app._on_subagents_tab():
+        return app.active_subagent_drill is None
     return False
 
 
@@ -262,6 +264,8 @@ def _enter_summary(app: App) -> str:
         )
     if tab == "Models":
         return "this model's economics and sessions, within this scope"
+    if tab == "Subagents":
+        return "inspect the selected execution"
     return "its sessions, within this scope"
 
 
@@ -675,6 +679,8 @@ KEYS: tuple[Key, ...] = (
         if _on_trace(app)
         else "back to the prompts"
         if _on_turns(app) and app.active_turn_drill is not None
+        else "back to the executions"
+        if app._on_subagents_tab() and app.active_subagent_drill is not None
         else "back to the Trends session list"
         if in_session(app) and app._trend_return is not None and app._trend_return[0] == "drill"
         else "step back out — session → zoom → browse",
@@ -697,6 +703,8 @@ KEYS: tuple[Key, ...] = (
             if _on_turns(app) and app.active_turn_drill is not None
             else "pick a prompt"
             if _on_turns(app)
+            else "pick an execution"
+            if app._on_subagents_tab() and app.active_subagent_drill is None
             else "move / scroll",
         ),
         section="nav",
@@ -718,6 +726,8 @@ KEYS: tuple[Key, ...] = (
         actions=("top", "bottom"),
         summary=lambda app: "first / last prompt"
         if _on_turns(app) and app.active_turn_drill is None
+        else "first / last execution"
+        if app._on_subagents_tab() and app.active_subagent_drill is None
         else "top / bottom",
         section="nav",
         when=lambda app: not in_trends(app) or app.trend_drill is not None,

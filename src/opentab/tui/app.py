@@ -461,6 +461,14 @@ class App:
         self._turn_drill_session: str | None = None
         self._turn_cursor = 0
         self._turn_follow = False
+        self._subagent_snapshot = None
+        self._subagent_order: tuple[int, ...] = ()
+        self._subagent_selected: int | None = None
+        self.subagent_drill: int | None = None
+        self._subagent_follow = False
+        self._subagent_list_scroll = 0
+        self._subagent_prompt: tuple | None = None
+        self._subagent_prompt_loading: tuple | None = None
         # The third level: one turn's trace, addressed by its ABSOLUTE row index so it
         # survives the group's own ordering. Its cursor is a position within the drilled
         # prompt, cleared with the drill it belongs to.
@@ -2151,6 +2159,158 @@ class App:
     def _on_turns_tab(self) -> bool:
         return self.view == "session" and self.active_tab_name() == "Turns"
 
+    def _on_subagents_tab(self) -> bool:
+        return self.view == "session" and self.active_tab_name() == "Subagents"
+
+    def subagent_rows(self, workflow: Workflow) -> list[dict]:
+        nodes = self.session_node_rows(workflow.id)
+        snapshot = self._subagent_snapshot
+        if snapshot is None or snapshot[0] != workflow.id or snapshot[1] is not nodes:
+            self._clear_subagent_prompt()
+            self._subagent_snapshot = (workflow.id, nodes)
+            self._subagent_selected = self.subagent_drill = None
+            self._subagent_follow = snapshot is not None
+            self._subagent_order = ()
+            self._subagent_list_scroll = 0
+        include_root = (
+            any(row["depth"] > 0 for row in nodes)
+            and self.whatif_model
+            and self.whatif_session_totals(workflow)
+        )
+        # Snapshot indices work for anonymous remote nodes and duplicate labels, and
+        # survive sorting/repricing. They expire when the owning node snapshot changes.
+        rows = [
+            dict(row, _node_index=i)
+            for i, row in enumerate(nodes)
+            if row["depth"] > 0 or include_root
+        ]
+        rows = self.sorted_subagent_rows(self._priced_nodes(rows))
+        order = tuple(row["_node_index"] for row in rows)
+        if self._subagent_order and order != self._subagent_order:
+            self._subagent_follow = True
+        self._subagent_order = order
+        if self.subagent_drill is not None and self.subagent_drill not in order:
+            self.subagent_drill = None
+            self._clear_subagent_prompt()
+        return rows
+
+    def subagent_cursor(self, rows: list[dict]) -> int:
+        return next(
+            (i for i, row in enumerate(rows) if row["_node_index"] == self._subagent_selected), 0
+        )
+
+    @property
+    def active_subagent_drill(self) -> int | None:
+        wf = self.current_session()
+        snapshot = self._subagent_snapshot
+        if (
+            wf is None
+            or self.subagent_drill is None
+            or snapshot is None
+            or snapshot[0] != wf.id
+            or snapshot[1] is not self._nodes_by_session.get(wf.id)
+        ):
+            return None
+        if snapshot[1][self.subagent_drill]["depth"] == 0 and not (
+            self.whatif_model and self.whatif_session_totals(wf)
+        ):
+            self.subagent_drill = None
+        return self.subagent_drill
+
+    def _move_subagent_cursor(self, delta: int) -> bool:
+        wf = self.current_session()
+        rows = self.subagent_rows(wf) if wf else []
+        if not rows or self.active_subagent_drill is not None:
+            return False
+        cursor = self.subagent_cursor(rows)
+        moved = max(0, min(cursor + delta, len(rows) - 1))
+        if moved == cursor:
+            return False
+        self._subagent_selected = rows[moved]["_node_index"]
+        self._subagent_follow = True
+        return True
+
+    def open_subagent_drill(self, ordinal: int | None = None) -> bool:
+        wf = self.current_session()
+        rows = self.subagent_rows(wf) if wf else []
+        if not rows:
+            return False
+        if self.active_subagent_drill is not None:
+            return True
+        cursor = self.subagent_cursor(rows) if ordinal is None else ordinal
+        if not 0 <= cursor < len(rows):
+            return False
+        self._subagent_selected = self.subagent_drill = rows[cursor]["_node_index"]
+        self._clear_subagent_prompt()
+        self._subagent_list_scroll = self.scroll
+        self.scroll = 0
+        self._subagent_follow = False
+        return True
+
+    def close_subagent_drill(self) -> bool:
+        if self.active_subagent_drill is None:
+            return False
+        self.subagent_drill = None
+        self._clear_subagent_prompt()
+        self.scroll = self._subagent_list_scroll
+        self._subagent_follow = True
+        return True
+
+    def read_node_prompt(self, workflow_id: str, node: dict) -> str | None:
+        # Raw instructions stay off numeric rows and exports. Resolve by exact owning
+        # root before passing a native child ID; merged stores only index root IDs.
+        if self.store.demo or not node.get("id") or not node.get("depth"):
+            return None
+        if sum(w.id == workflow_id for w in self.loaded) != 1:
+            return None  # node snapshots are root-ID keyed; refuse ambiguous merged roots
+        reader = getattr(self.trace_owner(workflow_id), "node_prompt", None)
+        text = reader(workflow_id, node["id"]) if callable(reader) else None
+        return text if isinstance(text, str) and text.strip() else None
+
+    def _clear_subagent_prompt(self) -> None:
+        self._subagent_prompt = None
+        self._subagent_prompt_loading = None
+
+    def subagent_prompt_text(self) -> str:
+        if self.store.demo:
+            return "Received prompts are hidden in demo mode."
+        index = self.active_subagent_drill
+        snapshot = self._subagent_snapshot
+        if index is None or snapshot is None:
+            return "No execution selected."
+        node = snapshot[1][index]
+        if not node.get("depth"):
+            return "The root is not a delegated execution."
+        if not node.get("id"):
+            return "Received prompt unavailable: this summary has no exact child identity."
+        if not callable(getattr(self.trace_owner(snapshot[0]), "node_prompt", None)):
+            return "Received prompt reading is not supported by this harness."
+        cached = self._subagent_prompt
+        if cached is not None and cached[0] is snapshot and cached[1] == index:
+            return cached[2]
+        self._subagent_prompt_loading = (snapshot, index)
+        return "Loading received prompt..."
+
+    def load_subagent_prompt(self) -> None:
+        pending, self._subagent_prompt_loading = self._subagent_prompt_loading, None
+        if pending is None:
+            return
+        snapshot, index = pending
+        if (
+            self.store.demo
+            or not self._on_subagents_tab()
+            or self.active_subagent_drill != index
+            or self._subagent_snapshot is not snapshot
+        ):
+            self._clear_subagent_prompt()
+            return
+        try:
+            text = self.read_node_prompt(snapshot[0], snapshot[1][index])
+            text = text or "No received user prompt is retained for this execution."
+        except Exception:  # a content read must not take down accounting or echo source data
+            text = "Could not read the received prompt. Close and reopen this execution to retry."
+        self._subagent_prompt = (snapshot, index, text)
+
     def _move_turn_cursor(self, delta: int) -> bool:
         wf = self.current_session()
         groups = self.turn_runs(wf.id) if wf else []
@@ -2858,6 +3018,7 @@ class App:
 
     def reload(self) -> None:
         anchor = self.selection_anchor()
+        self._clear_subagent_prompt()
         self._clear_trace_expansion()
         self.loaded = self.store.workflows()
         self._snapshot_real_costs()
@@ -3183,6 +3344,7 @@ class App:
         }
 
     def _reload_for_source(self, restore: dict | None = None) -> None:
+        self._clear_subagent_prompt()
         self._clear_trace_expansion()
         self.loaded = self.store.workflows()
         self._snapshot_real_costs()
@@ -4705,6 +4867,7 @@ class App:
         if self.in_subagent_sort_context():
             self.subagent_sort_by = value
             self.subagent_sort_reverse = False
+            self._subagent_follow = True
         elif self.in_project_sort_context():
             self.project_sort_by = value
             self.project_sort_reverse = False
@@ -4767,6 +4930,7 @@ class App:
                 self.subagent_sort_by = key
                 self.subagent_sort_reverse = False
             self.scroll = 0
+            self._subagent_follow = True
             return
         if target == "harness":
             if key not in self.harness_sort_options:
@@ -5259,6 +5423,8 @@ class App:
     def move(self, delta: int) -> None:
         if self.view == "session":
             with self.session_selection():
+                if self._on_subagents_tab() and self._move_subagent_cursor(delta):
+                    return
                 if self._on_turns_tab():
                     if self.active_turn_drill is None:
                         if self._move_turn_cursor(delta):
@@ -5442,7 +5608,7 @@ class App:
             n = len(self.zoom_machine_rows())
             if n:
                 self.machine_pick_index = max(0, min(self.machine_pick_index + delta, n - 1))
-        elif kind in ("detail", "turnline"):
+        elif kind in ("detail", "turnline", "subagentline"):
             self.scroll = max(0, self.scroll + delta)  # scroll the detail content
         else:
             self.move(delta)  # a gap or the tab strip: the active pane, as before
@@ -5516,6 +5682,13 @@ class App:
                 self.machine_pick_index = len(rows) - 1 if to_end else 0
             return
 
+        if self._on_subagents_tab() and self.active_subagent_drill is None:
+            wf = self.current_session()
+            rows = self.subagent_rows(wf) if wf else []
+            if rows:
+                self._subagent_selected = rows[-1 if to_end else 0]["_node_index"]
+                self._subagent_follow = True
+                return
         if self._on_turns_tab() and self.active_turn_drill is None:
             wf = self.current_session()
             groups = self.turn_runs(wf.id) if wf else []
@@ -5813,6 +5986,10 @@ class App:
                 wf_id, self._session_loading = self._session_loading, None
                 stdscr.refresh()  # make sure the loading frame actually hits the screen
                 self.prefetch_session_data(wf_id)
+                continue
+            if self.startup_warning is None and self._subagent_prompt_loading is not None:
+                stdscr.refresh()
+                self.load_subagent_prompt()
                 continue
             if self._refresh_request is not None:
                 # The "refreshing…" toast painted above; now do the blocking ssh re-pull
@@ -6884,6 +7061,8 @@ class App:
         if act == "select":
             # On the Turns tab select folds/unfolds the selected ▸ group; everywhere
             # else it drills in (and it still does here when there's no group to toggle).
+            if self._on_subagents_tab() and self.open_subagent_drill():
+                return True
             if self._on_turns_tab() and self._toggle_turn_cursor():
                 return True
             self.drill_in()
@@ -6895,6 +7074,8 @@ class App:
             self.toggle_trace_expansion()
             return True
         if act == "back":
+            if self._on_subagents_tab() and self.close_subagent_drill():
+                return True
             # A drilled prompt is the innermost scope on the Turns tab, so Esc leaves it
             # before it starts popping the view stack -- but ONLY while that tab is the
             # one on screen. Left ungated, Esc on Tools or Context silently tore down an
@@ -7467,6 +7648,11 @@ class App:
             # tabs/rows win): a click anywhere in the right pane focuses it.
             if self.view == "browse":
                 self.drill_in()
+            return
+        if kind == "subagentline":
+            ordinal = self.renderer._subagent_header_at.get(value)
+            if ordinal is not None and self._on_subagents_tab():
+                self.open_subagent_drill(ordinal)
             return
         if kind == "turnline":
             # A click on a Turns-tab prompt row drills into it (its full text + its

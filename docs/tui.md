@@ -288,6 +288,23 @@ on available row data; content flags advertise only an openable trace and never
 trigger a content fetch just to draw a marker. Tools attribution means usage in
 steps that invoked a tool, not the size of the tool's output.
 
+Subagents reuses the prefetched node snapshot for its delegation overview,
+execution table, agent/model summaries and selected execution's token breakdown.
+Selection uses the node's index within that snapshot, not its label or sorted
+position: remote nodes may lack IDs, and labels can repeat. Sorting and repricing
+preserve identity; replacing the snapshot resets the drill. Row maps and cursor
+follow are rebuilt with table geometry and cleared in execution detail. No raw
+content is needed for these metrics, and no node-to-turn join is inferred. Shares
+use node sums; model groupings are explicitly representative, not per-model accounting.
+
+The separate Received prompt section uses the optional `node_prompt(root_id, node_id)`
+reader of the exact owning store. It reads the first recorded child user message,
+not the root timeline's prompt grouping or a node title. Opening an execution queues
+the read after the loading frame; only that execution's text is retained, separately
+from numeric snapshots. Closing, changing tabs/sessions, reload and demo/source changes
+discard it. Unsupported/anonymous nodes and missing/ambiguous records have no title
+fallback. Demo is checked before any content read.
+
 Turns retains one prompt/turn table layout and one session's prompt-run indices.
 Scrolling reuses the analysis, charts, formatted lines, and click map; only cursor
 highlight and viewport change. Layout keys include the turn snapshot, pane width,

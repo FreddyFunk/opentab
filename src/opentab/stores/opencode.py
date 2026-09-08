@@ -845,6 +845,34 @@ class Store:
         # Same gate as the tool breakdown: both read the part table.
         return bool(self.supports_tool_breakdown)
 
+    def node_prompt(self, workflow_id: str, node_id: str) -> str | None:
+        """Read the exact child's first user text, independently of billed turns."""
+        if self.demo or node_id == workflow_id or not self.supports_tool_breakdown:
+            return None
+        sql = f"""
+        with recursive tree(id) as (
+          select id from session where id = ?
+          union
+          select child.id from session child join tree on child.parent_id = tree.id
+        )
+        select m.id, json_extract(p.data, '$.text') as text
+        from message m join part p on p.message_id = m.id and p.session_id = m.session_id
+        where m.session_id = ? and m.session_id in (select id from tree)
+          and json_extract(m.data, '$.role') = 'user'
+          and json_extract(p.data, '$.type') = 'text'
+          and json_type(p.data, '$.text') = 'text'
+        order by {_TL_TS}, m.rowid, p.rowid
+        """
+        current = None
+        parts: list[str] = []
+        for mid, text in self.conn.execute(sql, [workflow_id, node_id]):
+            if mid != current:
+                if any(part.strip() for part in parts):
+                    return "\n\n".join(parts)
+                current, parts = mid, []
+            parts.append(text)
+        return "\n\n".join(parts) if any(part.strip() for part in parts) else None
+
     def message_timeline_all(self) -> dict[str, list[dict]]:
         # The whole-corpus Turns for `--export`: every root session's timeline in ONE
         # grouped scan, keyed by root id. The per-session message_timeline restricts to

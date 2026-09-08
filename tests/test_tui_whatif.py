@@ -22,7 +22,15 @@ def _table(lines):
         for i, ln in enumerate(lines)
         if ln[:1] in ("┌", "+") and ("Session Tree" in ln or "Subagent Ex" in ln)
     )
-    return lines[start:]
+    end = next(
+        (
+            i
+            for i in range(start + 1, len(lines))
+            if lines[i][:1] in ("┌", "+") and "By " in lines[i]
+        ),
+        len(lines),
+    )
+    return lines[start:end]
 
 
 def _table_cells(lines):

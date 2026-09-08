@@ -103,6 +103,7 @@ class CodexStore:
             "prompts": [],  # user_message events, for the Turns tab's ▸ grouping
             "event_ts": [],  # every record's raw ISO ts, for worked_seconds
             "parent_id": None,  # ThreadSpawn.parent_thread_id for a spawned thread
+            "parent_ids": set(),  # all observed ownership claims, for exact content reads
             "agent": None,  # the spawned thread's nickname/role, for the tree label
         }
 
@@ -235,14 +236,18 @@ class CodexStore:
             seen.add(pid)
             cur = pid
 
-    def _parse(self) -> dict[str, dict]:
-        if self._sessions is not None:
+    def _parse(self, *, include_empty: bool = False) -> dict[str, dict]:
+        if self._sessions is not None and not include_empty:
             return self._sessions
         sessions: dict[str, dict] = {}
         for path, text in read_files_parallel(self._files()):
             self._parse_file(path, text.split("\n"), sessions)
         for sid, s in sessions.items():
             self._finalize(sid, s)
+        if include_empty:
+            # Content remains readable before a child records any usage.
+            self._link_subagents(sessions)
+            return sessions
         # Drop sessions with no recorded token usage (legacy rollouts, aborted runs):
         # they would only add a pile of $0 / 0-token rows to a spend browser.
         self._sessions = {sid: s for sid, s in sessions.items() if s["model_rows"]}
@@ -411,8 +416,9 @@ class CodexStore:
                         s["cwd"] = meta["cwd"]
                     if meta.get("timestamp") and not s["ts_meta"]:
                         s["ts_meta"] = meta["timestamp"]
+                    spawn = self._spawn_source(meta.get("source"))
+                    s["parent_ids"].add(spawn[0] if spawn else None)
                     if s["parent_id"] is None:
-                        spawn = self._spawn_source(meta.get("source"))
                         if spawn:
                             s["parent_id"], s["agent"] = spawn
             if s is None:
@@ -547,7 +553,7 @@ class CodexStore:
                         s["title_prompt"] = " ".join(txt.split())[:80]
                     # Every prompt is kept (raw, line breaks intact) for the Turns
                     # tab's ▸ grouping; the record timestamp doubles as its id.
-                    s["prompts"].append({"ts": ts or "", "id": ts or txt, "title": txt.strip()})
+                    s["prompts"].append({"ts": ts or "", "id": ts or txt, "title": txt})
             elif typ == "event_msg" and item_type == "token_count":
                 before = len(s["turns"])
                 next_prev = self._apply_token_count(
@@ -960,6 +966,33 @@ class CodexStore:
 
     def workflow_nodes(self, workflow_id: str) -> list[dict]:
         return self._nodes_from(self._parse(), workflow_id)
+
+    def node_prompt(self, workflow_id: str, node_id: str) -> str | None:
+        """The selected descendant's first recorded user prompt, never its label."""
+        if self.demo or node_id == workflow_id:
+            return None
+        sessions = self._sessions
+        if sessions is None or workflow_id not in sessions or node_id not in sessions:
+            sessions = self._parse(include_empty=True)
+        if workflow_id not in sessions or not any(
+            sid == node_id for sid, _depth in self._descendants(sessions, workflow_id)
+        ):
+            return None
+        current = node_id
+        seen = set()
+        while current != workflow_id:
+            if current in seen or current not in sessions:
+                return None
+            seen.add(current)
+            session = sessions[current]
+            if len(session["parent_ids"]) != 1:
+                return None  # resumed rollouts must agree about the entire ownership chain
+            current = session["parent_id"]
+        for prompt in sorted(sessions[node_id]["prompts"], key=lambda p: p["ts"]):
+            text = prompt["title"]  # Actual user-message event text, not the session title.
+            if isinstance(text, str) and text.strip():
+                return text
+        return None
 
     def _nodes_from(self, sessions: dict[str, dict], workflow_id: str) -> list[dict]:
         s = sessions.get(workflow_id)

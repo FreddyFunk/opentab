@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 from opentab import __version__
 from opentab.pricing import (
@@ -242,7 +243,8 @@ def build_payload(app: App) -> dict:
         if w.subagents:
             # workflow_nodes applies store-specific demo transforms; isolate failures.
             try:
-                nodes[w.id] = [_node_row(r) for r in store.workflow_nodes(w.id)]
+                # Share the memoized order with the live snapshot-index prompt endpoint.
+                nodes[w.id] = [_node_row(r) for r in app.session_node_rows(w.id)]
             except Exception:  # noqa: BLE001 -- backend-specific errors, all non-fatal
                 continue
     meta = {
@@ -446,6 +448,7 @@ class _Handler(BaseHTTPRequestHandler):
             "img-src data:; connect-src 'self'",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -476,6 +479,8 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/session/"):
             workflow_id = unquote(path[len("/api/session/") :])
             self._send_json(session_extras(server.app, workflow_id))
+        elif path == "/api/node-prompt":
+            self._send_json(server.node_prompt(self.path.partition("?")[2]))
         else:
             self._send(404, "text/plain; charset=utf-8", b"not found")
 
@@ -522,22 +527,53 @@ class ReportServer(HTTPServer):
         super().__init__(address, _Handler)
         self.app = app
         self._page: str | None = None
+        self._node_snapshot: str | None = None
 
     def page(self) -> str:
         if self._page is None:
             payload = build_payload(self.app)
             payload["meta"]["serve"] = True
+            self._node_snapshot = secrets.token_urlsafe()
+            payload["meta"]["nodeSnapshot"] = self._node_snapshot
             self._page = render_html(payload)
         return self._page
 
+    def node_prompt(self, query: str) -> dict:
+        """Resolve only an explicitly selected execution from the current page."""
+        unavailable = {"text": None, "error": "Received prompt not available."}
+        try:
+            params = parse_qs(query, keep_blank_values=True, max_num_fields=3)
+            if set(params) != {"session", "node", "snapshot"} or any(
+                len(values) != 1 for values in params.values()
+            ):
+                return unavailable
+            workflow_id, index, snapshot = (
+                params[key][0] for key in ("session", "node", "snapshot")
+            )
+            if not self._node_snapshot or snapshot != self._node_snapshot:
+                return {"text": None, "error": "Page snapshot expired. Refresh the page."}
+            if self.app.store.demo or not index.isascii() or not index.isdecimal():
+                return unavailable
+            if not workflow_id or sum(w.id == workflow_id for w in self.app.all_workflows) != 1:
+                return unavailable
+            nodes = self.app.session_node_rows(workflow_id)
+            selected = int(index)
+            if selected >= len(nodes):
+                return unavailable
+            text = self.app.read_node_prompt(workflow_id, nodes[selected])
+            return {"text": text if isinstance(text, str) else None}
+        except Exception:  # noqa: BLE001 -- backend failures must not expose paths or raw IDs
+            return unavailable
+
     def reload(self) -> None:
-        self.app.reload()
         self._page = None
+        self._node_snapshot = None
+        self.app.reload()
 
     def refresh_machine(self, name: str | None) -> list:
+        self._page = None
+        self._node_snapshot = None
         results = self.app.refresh_machines_now(name)
-        if results:
-            self._page = None
         return results
 
 
@@ -556,7 +592,7 @@ def serve_command(app: App, args: argparse.Namespace) -> int:
     port = getattr(args, "port", DEFAULT_PORT) or DEFAULT_PORT
     if bind not in ("127.0.0.1", "localhost", "::1"):
         sys.stderr.write(
-            "warning: serving beyond localhost exposes prompt titles, project paths, "
+            "warning: serving beyond localhost exposes full recorded user prompts, project paths, "
             "and spend to anyone who can reach the port; prefer a VPN/Tailscale "
             "address and never a public interface\n"
         )

@@ -171,8 +171,8 @@ class OmpStore(PiStore):
             or "(untitled)"
         )
 
-    def _parse(self) -> dict[str, dict]:
-        if self._sessions is not None:
+    def _parse(self, *, include_empty: bool = False) -> dict[str, dict]:
+        if self._sessions is not None and not include_empty:
             return self._sessions
         sessions: dict[str, dict] = {}
         for path, text in read_files_parallel(self._files()):
@@ -189,6 +189,10 @@ class OmpStore(PiStore):
         # workflows(). Splicing instead re-parents them onto the nearest surviving
         # ancestor, so a stub is transparent rather than a cut.
         self._resolve_parents(sessions)
+        if include_empty:
+            # Do not splice out a child whose prompt arrived before its usage.
+            self._link_subagents(sessions)
+            return sessions
         self._sessions = self._splice_usage_less(sessions)
         self._link_subagents(self._sessions)
         return self._sessions
@@ -372,6 +376,56 @@ class OmpStore(PiStore):
 
     def workflow_nodes(self, workflow_id: str) -> list[dict]:
         return self._tree_nodes(self._parse(), workflow_id)
+
+    def node_prompt(self, workflow_id: str, node_id: str) -> str | None:
+        """Read the native-UUID child's own prompt, not its nickname or title hint."""
+        if self.demo or node_id == workflow_id:
+            return None
+        sessions = self._sessions
+        if sessions is None or workflow_id not in sessions or node_id not in sessions:
+            sessions = self._parse(include_empty=True)
+        if workflow_id not in sessions or not any(
+            sid == node_id for sid, _depth in self._descendants(sessions, workflow_id)
+        ):
+            return None
+        by_path = {path: sid for sid, s in sessions.items() for path in s["paths"]}
+        current = node_id
+        seen = set()
+        while current != workflow_id:
+            if current in seen or current not in sessions:
+                return None
+            seen.add(current)
+            parents = {by_path.get(path) for path in sessions[current]["parent_paths"]}
+            if len(parents) != 1 or None in parents:
+                return None  # same UUID under different roots cannot own one received prompt
+            current = next(iter(parents))
+        prompts = sorted(sessions[node_id]["prompts"], key=lambda p: p["ts"])
+        if not prompts:
+            return None
+        first = prompts[0]
+        result = None
+        # Pi trims the prompt's edges. Read only this child's files on demand to
+        # recover its verbatim text, rather than reparsing every file at startup.
+        for _path, raw in read_files_parallel(sessions[node_id]["paths"]):
+            for line in raw.splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("type") != "message":
+                    continue
+                message = record.get("message")
+                if not isinstance(message, dict) or message.get("role") != "user":
+                    continue
+                ts = record.get("timestamp") or ""
+                mid = str(record.get("id") or ts)
+                if (mid, ts) != (first["id"], first["ts"]):
+                    continue
+                text = self._user_text(message.get("content"))
+                if text.strip() != first["title"] or (result is not None and result != text):
+                    return None
+                result = text
+        return result
 
     def _session_acc(self, s: dict) -> tuple[dict, str]:
         # A session's OWN usage rolled across its models (never the folded

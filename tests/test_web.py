@@ -172,6 +172,11 @@ def test_web_payload_embeds_nodes_and_reprices_unpriced_ones():
     assert root["real"] == 2.0 and root["api"] == 2.0  # priced node: api == real
     assert sub["real"] == 0.0 and sub["api"] > 0  # $0 node repriced at list rates
     assert sub["agent"] == "explore" and sub["tokens"] == 1_100_000
+    assert all(
+        set(n) == {"title", "agent", "depth", "model", "date", "real", "api", "tokens", "tok"}
+        for n in nodes
+    )
+    assert all(len(n["tok"]) == 6 for n in nodes)
 
 
 def test_web_session_extras_reports_turns_with_both_costs():
@@ -529,6 +534,210 @@ def test_web_shipped_javascript_parses():
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_web_execution_details_execute_shipped_javascript():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript execution detail check: Node.js is not installed (required in CI)")
+        return
+    source = _js_source()
+    # Run the real renderers and event handlers, without page startup or live requests.
+    shipped = source[: source.index("document.getElementById('trends').addEventListener")]
+    shipped += re.search(r"window.addEventListener\('popstate', e => \{.*?\n\}\);", source, re.S)[0]
+    result = subprocess.run(
+        [node, "-"],
+        input=r"""
+const assert = require('node:assert/strict');
+class Node {
+  constructor(tag, text = '') { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.text = text; this.style = {}; }
+  appendChild(n) { this.children.push(n); n.parent = this; return n; }
+  append(...nodes) { nodes.forEach(n => this.appendChild(n)); }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener(k, fn) { this.events[k] = fn; }
+  set textContent(t) { this.children = []; this.text = t; }
+  get textContent() { return this.text + this.children.map(n => n.textContent).join(''); }
+  querySelectorAll() { return []; }
+  focus() { document.activeElement = this; }
+  get nextElementSibling() { return this.parent.children[this.parent.children.indexOf(this) + 1]; }
+  get previousElementSibling() { return this.parent.children[this.parent.children.indexOf(this) - 1]; }
+}
+const elements = new Map(), listeners = {};
+const document = {
+  activeElement: null,
+  createElement: tag => new Node(tag), createElementNS: (_, tag) => new Node(tag),
+  createTextNode: text => new Node('#text', text),
+  getElementById(id) { if (!elements.has(id)) elements.set(id, new Node('div')); return elements.get(id); },
+  addEventListener(k, fn) { listeners[k] = fn; }
+};
+const window = {addEventListener(k, fn) { listeners[k] = fn; }};
+const requests = [];
+function fetch(url, options) {
+  return new Promise((resolve, reject) => requests.push({url, options, resolve, reject}));
+}
+const location = {hash: '#/s/w1'};
+const history = {
+  state: null, entries: [],
+  replaceState(state) { this.state = state; },
+  pushState(state, _, hash) { this.entries.push(this.state); this.state = state; assert.equal(hash, location.hash); },
+  back() { this.state = this.entries.pop(); listeners.popstate({state:this.state}); }
+};
+const make = (depth, real, api, tokens) => ({title:'same <img src=x onerror=alert(1)>', agent:'__proto__',
+  model:'test/model', date:'2026-09-08T12:34:56Z', depth, real, api, tokens, tok:[1234,2345,3456,4000,4766,1000]});
+const fixtures = [make(0, 10, 10, 1000), make(1, 2, 20, 2000), make(2, 8, 30, 7000),
+  {...make(1, 0, 0, 0), title:'', agent:'', model:'', date:'', tok:[0,0,0,0,0,0]}];
+const payload = {meta:{source:'test'}, workflows:[{id:'w1', date:'2026-09-08', tokens:999999, real:999, api:999}],
+  nodes:{w1:fixtures}, models:{w1:[{model:'test/model', tokens:1000, tok:[1000,0,0,0,0,0]}]},
+  whatif:{rates:{'test/model':[1,2,.1,.5,1], target:[2,3,.2,1,2]}}};
+document.getElementById('opentab-data').textContent = JSON.stringify(payload);
+"""
+        + shipped
+        + r"""
+function render() { renderDetail(curScope(), []); }
+const view = document.getElementById('view');
+function all(el, tag) { return [...(el.tag === tag ? [el] : []), ...el.children.flatMap(n => all(n, tag))]; }
+function text() { return view.textContent; }
+function key(key, target) {
+  const e = {key, target, preventDefault(){this.prevented=true}, stopPropagation(){this.stopped=true}};
+  (target ? target.events.keydown : listeners.keydown)(e); return e;
+}
+function fields() {
+  const dl = all(view, 'dl')[0], pairs = new Map();
+  for (let i = 0; i < dl.children.length; i += 2) pairs.set(dl.children[i].textContent, dl.children[i+1].textContent);
+  return pairs;
+}
+TAB = 'Subagents'; render();
+assert.ok(text().includes('delegated executions34 executions including root'));
+assert.ok(text().includes('direct / nested2 / 1'));
+assert.ok(text().includes('max depth2'));
+assert.ok(text().includes('50% of node cost'));
+assert.ok(text().includes('90% of node tokens')); // Never the workflow's 999999 tokens.
+let tables = all(view, 'table');
+assert.equal(all(tables[0], 'tbody')[0].children.length, 2); // '__proto__' is a safe Map key.
+let grid = tables[1];
+all(grid, 'th').find(n => n.textContent === 'Cost').events.click();
+grid = all(view, 'table')[1];
+let rows = all(grid, 'tbody')[0].children;
+assert.deepEqual(rows.map(r => r.children[0].textContent), ['1','3','2','4']);
+assert.equal(rows[1].attrs.tabindex, '0');
+PRICES.open = true;
+assert.equal(key('Enter', rows[1]).prevented, undefined); assert.equal(NODE_DRILL, null);
+PRICES.open = false;
+key('ArrowDown', rows[0]); assert.equal(document.activeElement, rows[1]);
+assert.equal(key('Tab', rows[1]).stopped, true);
+assert.equal(key('Enter', rows[1]).prevented, true);
+assert.equal(NODE_DRILL, 2); assert.equal(location.hash, '#/s/w1');
+assert.ok(text().includes('Execution 3 of 4'));
+assert.ok(text().includes('Title'));
+assert.ok(text().includes('Received prompt not available in static reports.'));
+assert.equal(requests.length, 0);
+assert.equal(all(view, 'img').length, 0); // User title is a text node, never HTML.
+let f = fields();
+assert.equal(f.get('Uncached input'), '1,234'); assert.equal(f.get('Output'), '2,345');
+assert.equal(f.get('Reasoning'), '3,456'); assert.equal(f.get('Cache read'), '4,000');
+assert.equal(f.get('Cache write'), '4,766'); assert.equal(f.get('recorded total tokens'), '7,000');
+assert.equal(f.get('1h cache write'), '1,000 (subset of cache write)');
+assert.equal(f.get('cache hit'), '40% (read / (input + read + write))');
+assert.equal(f.get('started'), '2026-09-08T12:34:56Z');
+assert.equal(f.get('recorded cost'), '$8.00'); assert.equal(f.get('cost share'), '40% of all nodes');
+assert.ok(text().includes('representative: an execution may use multiple models'));
+SORT['t-s-nodes'] = {key:'tokens', desc:false};
+key('$'); assert.equal(NODE_DRILL, 2);
+f = fields(); assert.equal(f.get('API-equivalent cost'), '$30.00');
+assert.equal(f.get('cost share'), '50% of all nodes');
+WHATIF.model = 'target'; render();
+assert.equal(NODE_DRILL, 2);
+assert.equal(fields().get('what-if at target'), money(whatifCost(fixtures[2].tok, WI_PRICE.get('target'))));
+assert.equal(fields().get('API-equivalent cost'), '$30.00');
+assert.equal(key('Escape').prevented, true); assert.equal(NODE_DRILL, null);
+assert.equal(location.hash, '#/s/w1'); assert.ok(text().includes('TOTAL (list rates)'));
+assert.ok(text().includes('node totals disagree with its message totals'));
+rows = all(all(view, 'table')[1], 'tbody')[0].children;
+assert.deepEqual(rows.map(r => r.children[0].textContent), ['4','1','2','3']);
+rows[0].events.click(); assert.equal(NODE_DRILL, 3); // Empty title still has an identity.
+assert.ok(text().includes('(untitled)'));
+assert.equal(fields().get('cache hit'), '- (read / (input + read + write))');
+all(view, 'button')[0].events.click(); assert.equal(NODE_DRILL, null);
+openExecution(1); history.back(); assert.equal(NODE_DRILL, null);
+openExecution(0); resetScopeState(); assert.equal(NODE_DRILL, null);
+openExecution(1); history.back(); assert.equal(NODE_DRILL, null); // A reset/reload cannot resurrect an old drill.
+MODE = 'real'; WHATIF.model = null;
+DATA.nodes.w1 = fixtures.map(n => ({...n, real:0, api:0, tokens:0, tok:[0,0,0,0,0,0]}));
+render(); assert.ok(text().includes('- of node cost')); assert.ok(text().includes('- of node tokens'));
+assert.ok(!/NaN|Infinity/.test(text()));
+DATA.nodes.w1 = []; render(); assert.ok(text().includes('no subagents in this session'));
+delete DATA.nodes.w1; render(); assert.ok(text().includes('no subagents in this session'));
+(async () => {
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  DATA.nodes.w1 = fixtures;
+  META.serve = true; META.nodeSnapshot = 'snapshot & one'; META.demo = true;
+  openExecution(1);
+  assert.equal(requests.length, 0);
+  assert.ok(text().includes('Received prompt not available in demo mode.'));
+  META.demo = false; closeExecution(); render();
+  assert.equal(requests.length, 0); // Live list rendering does not prefetch prompts.
+  openExecution(1);
+  assert.equal(requests.length, 1);
+  assert.ok(text().includes('Loading received prompt...'));
+  const first = requests[0], url = new URL(first.url, 'http://localhost');
+  assert.equal(url.pathname, '/api/node-prompt');
+  assert.deepEqual([...url.searchParams], [['session','w1'], ['node','1'], ['snapshot','snapshot & one']]);
+  assert.equal(first.options.cache, 'no-store');
+  const raw = '  First line\n\n\t<img src=x onerror=alert(1)>\n' + 'long-unbroken-text'.repeat(1000);
+  first.resolve({ok:true, json:async () => ({text:raw})}); await tick();
+  assert.equal(NODE_PROMPT.text, raw);
+  assert.ok(all(view, 'div').some(n => n.className === 'prompt-full' && n.textContent === raw));
+  assert.equal(all(view, 'img').length, 0);
+  assert.ok(text().includes('not the complete system/context payload.'));
+  key('$'); WHATIF.model = 'target'; render();
+  assert.equal(requests.length, 1); // Pricing and re-rendering never reread the prompt.
+  openExecution(2);
+  assert.equal(first.options.signal.aborted, true);
+  assert.equal(NODE_PROMPT.text, null); assert.ok(!text().includes(raw));
+  const old = requests[1];
+  openExecution(1); const newer = requests[2];
+  old.resolve({ok:true, json:async () => ({text:'WRONG EXECUTION'})}); await tick();
+  assert.equal(NODE_PROMPT.loading, true); assert.ok(!text().includes('WRONG EXECUTION'));
+  closeExecution(); assert.equal(NODE_PROMPT, null); assert.equal(newer.options.signal.aborted, true);
+  openExecution(1); const reopened = requests[3];
+  newer.resolve({ok:true, json:async () => ({text:'OLD SAME SELECTION'})}); await tick();
+  assert.equal(NODE_PROMPT.loading, true); // Same session/index/snapshot, but a different request.
+  reopened.resolve({ok:true, json:async () => ({text:null})}); await tick();
+  assert.ok(text().includes('Received prompt not available for this execution.'));
+  assert.equal(NODE_PROMPT.text, null); // Never substitute the title.
+  openExecution(2); const changedSnapshot = requests[4];
+  META.nodeSnapshot = 'new snapshot';
+  changedSnapshot.resolve({ok:true, json:async () => ({text:'OLD SNAPSHOT'})}); await tick();
+  assert.equal(NODE_PROMPT.text, null); render(); assert.equal(NODE_PROMPT, null);
+  openExecution(1); const changedSession = requests[5];
+  location.hash = '#/s/other';
+  changedSession.resolve({ok:true, json:async () => ({text:'OTHER SESSION'})}); await tick();
+  assert.equal(NODE_PROMPT.text, null); resetScopeState(); assert.equal(NODE_PROMPT, null);
+  location.hash = '#/s/w1'; TAB = 'Subagents';
+  openExecution(1); const changedDemo = requests[6];
+  META.demo = true;
+  changedDemo.resolve({ok:true, json:async () => ({text:'SECRET IN DEMO'})}); await tick();
+  assert.equal(NODE_PROMPT.text, null); render(); assert.equal(NODE_PROMPT, null);
+  assert.ok(!text().includes('SECRET IN DEMO')); META.demo = false;
+  openExecution(1); requests[7].reject(new Error('private backend path')); await tick();
+  assert.ok(text().includes('Received prompt not available for this execution.'));
+  assert.ok(!text().includes('private backend path'));
+  openExecution(1); requests[8].resolve({ok:true, json:async () => ({text:null, error:'Page snapshot expired. Refresh the page.'})}); await tick();
+  assert.ok(text().includes('Page snapshot expired. Refresh the page.'));
+  openExecution(1); const changedTab = requests[9]; TAB = 'Turns'; render();
+  assert.equal(NODE_PROMPT, null); assert.equal(NODE_DRILL, null);
+  assert.equal(changedTab.options.signal.aborted, true);
+  changedTab.resolve({ok:true, json:async () => ({text:'OLD TAB'})}); await tick();
+  assert.equal(NODE_PROMPT, null);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+    assert ".prompt-full{white-space:pre-wrap;overflow-wrap:anywhere" in ot.webpage._CSS
 
 
 def test_web_harness_browse_executes_shipped_javascript():
@@ -949,6 +1158,114 @@ def test_web_report_server_serves_page_extras_and_404():
     thread.join(timeout=5)
 
 
+def test_web_node_prompt_endpoint_is_lazy_private_and_snapshot_bound():
+    import threading
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    from unittest.mock import Mock, PropertyMock, patch
+
+    w = workflow("w / & 1", "2026-05-01 10:00:00")
+    w.subagents = 1
+    args = type("Args", (), {"since": None, "until": None, "days": None})()
+    store = NodesFakeStore([w])
+    app = ot.App(store, args)
+    prompt = "  Private child task\n\n\t</script><img src=x>\n" + "full text " * 1000
+    # The App/store implementation is owned separately; exercise the web contract.
+    reader = Mock(return_value=prompt)
+    app.read_node_prompt = reader
+    server = ot.web.ReportServer(("127.0.0.1", 0), app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def get(query):
+        response = urllib.request.urlopen(base + "/api/node-prompt?" + query)
+        assert response.headers["Cache-Control"] == "no-store"
+        return json.loads(response.read())
+
+    def query(snapshot, node="1", session=w.id):
+        return urllib.parse.urlencode({"session": session, "node": node, "snapshot": snapshot})
+
+    try:
+        assert get(query("not-yet-generated"))["text"] is None
+        assert server._node_snapshot is None
+        static = ot.build_payload(app)
+        assert "nodeSnapshot" not in static["meta"]
+        extras = ot.session_extras(app, w.id)
+        app.prefetch_session_data(w.id)
+        page = urllib.request.urlopen(base + "/").read().decode()
+        snapshot = server._node_snapshot
+        assert snapshot and f'"nodeSnapshot":"{snapshot}"' in page
+        assert server.page() == page and server._node_snapshot == snapshot
+        for blob in (json.dumps(static), json.dumps(extras), page):
+            assert "Private child task" not in blob and "ses_sub" not in blob
+        reader.assert_not_called()
+        # Payload and endpoint must share one memoized sequence, even if the store changes.
+        with patch.object(store, "workflow_nodes", side_effect=AssertionError("must use snapshot")):
+            assert get(query(snapshot)) == {"text": prompt}
+        reader.assert_called_once_with(w.id, app.session_node_rows(w.id)[1])
+        assert reader.call_args.args[1]["id"] == "ses_sub"
+        reader.reset_mock()
+        for invalid in (
+            "",
+            query("stale"),
+            query(snapshot, "-1"),
+            query(snapshot, "1.0"),
+            query(snapshot, ""),
+            query(snapshot, "99999999999999999999999"),
+            query(snapshot, "ses_sub"),
+            query(snapshot, session="missing"),
+            query(snapshot, session=""),
+            query(snapshot) + "&node=0",
+        ):
+            assert get(invalid)["text"] is None
+        with patch.object(
+            type(app), "all_workflows", new_callable=PropertyMock, return_value=[w, w]
+        ):
+            assert get(query(snapshot))["text"] is None
+        with patch.object(app, "session_node_rows", side_effect=AssertionError("no demo reads")):
+            store.demo = True
+            assert get(query(snapshot))["text"] is None
+            store.demo = False
+        reader.assert_not_called()
+        req = urllib.request.Request(
+            base + "/api/node-prompt?" + query(snapshot), headers={"Host": "evil.example.com"}
+        )
+        try:
+            urllib.request.urlopen(req)
+            raise AssertionError("expected Host rejection")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        reader.assert_not_called()
+        reader.return_value = None
+        assert get(query(snapshot)) == {"text": None}
+        reader.side_effect = RuntimeError("private backend path /raw/node-id")
+        assert get(query(snapshot)) == {"text": None, "error": "Received prompt not available."}
+        reader.reset_mock(side_effect=True)
+        # Invalidation rejects the old ordinal before resolving any node or reading content.
+        urllib.request.urlopen(
+            urllib.request.Request(base + "/api/reload", data=b"", method="POST")
+        ).read()
+        assert server._page is None and server._node_snapshot is None
+        with patch.object(app, "session_node_rows", side_effect=AssertionError("stale index")):
+            assert get(query(snapshot))["text"] is None
+        reader.assert_not_called()
+        urllib.request.urlopen(base + "/").read()
+        assert server._node_snapshot and server._node_snapshot != snapshot
+        assert get(query(snapshot))["text"] is None
+        # Returned prompt data never becomes part of the cached page or static export.
+        assert "Private child task" not in server.page()
+        assert "Private child task" not in json.dumps(ot.build_payload(app))
+        with patch.object(app, "refresh_machines_now", return_value=[]):
+            server.refresh_machine("example")
+        assert server._page is None and server._node_snapshot is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_web_server_is_hardened_against_csrf_and_dns_rebinding():
     import threading
     import urllib.error
@@ -987,7 +1304,9 @@ def test_web_server_is_hardened_against_csrf_and_dns_rebinding():
         # ...while every local spelling passes, with or without the port.
         for host in ("localhost", f"localhost:{port}", "127.0.0.1", f"[::1]:{port}"):
             req = urllib.request.Request(base + "/", headers={"Host": host})
-            assert urllib.request.urlopen(req).status == 200
+            with urllib.request.urlopen(req) as response:
+                assert response.status == 200
+                response.read()
     finally:
         server.shutdown()
         server.server_close()
@@ -1170,6 +1489,7 @@ def test_web_refresh_endpoint_repulls_the_named_machine():
     app.refresh_machines_now = fake_refresh
     server = ot.web.ReportServer(("127.0.0.1", 0), app)
     server.page()  # prime the page cache so we can prove the refresh invalidates it
+    snapshot = server._node_snapshot
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
@@ -1184,6 +1504,9 @@ def test_web_refresh_endpoint_repulls_the_named_machine():
         assert body["ok"] is True and body["results"] == [["server", 4, ""]]
         assert captured["name"] == "server"
         assert server._page is None  # the next GET rebuilds off the freshly pulled data
+        assert snapshot and server._node_snapshot is None
+        server.page()
+        assert server._node_snapshot != snapshot
     finally:
         server.shutdown()
         server.server_close()
@@ -1837,7 +2160,8 @@ def test_web_range_change_cannot_restore_a_sessions_model_return_hop():
             "-e",
             """
 const assert = require('node:assert/strict');
-let location = {hash: '#/'}, MSUB, TAB, RETURN, FILTER;
+let location = {hash: '#/'}, MSUB, TAB, RETURN, FILTER, NODE_DRILL;
+function clearNodePrompt() {}
 let RANGE, W = [], ALL_W = [], EXPANDED = new Set();
 function render() {}
 function closeRange() {}
@@ -1910,7 +2234,8 @@ let STARTUP_WARNINGS = [], WHATS_NEW_OPEN = false, THEMEPICK = false;
 let WHATIF = {open:false}, PRICES = {open:false}, RANGE = {pick:false};
 let TRENDS = {open:true, tab:'Models', drill:{kind:'model', key:'target'}, drillTab:'Economics'};
 let META = {demo:false}, BROWSE = 'time', FOCUS = '', TAB = 'Models', MODE = 'real';
-let MSUB = null, TURN_DRILL = null, RETURN = null, W = [], FILTER = '';
+let MSUB = null, TURN_DRILL = null, NODE_DRILL = null, RETURN = null, W = [], FILTER = '';
+function clearNodePrompt() {}
 const EXPANDED = new Set(), TREND_TABS = ['Models'];
 let trendRenders = 0;
 function renderTrends() { trendRenders++; }

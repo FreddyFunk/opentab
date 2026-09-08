@@ -68,6 +68,7 @@ The optional session interface extends this without making the UI format-aware:
 | Tool attribution | `tool_breakdown(id)` | `supports_tools(id)` |
 | Estimated context composition | `context_breakdown(id)` | `supports_context(id)` |
 | Recorded turn content | `turn_content(id, content_key=None)` | `supports_turn_content(id)` |
+| Received subagent prompt | `node_prompt(root_id, node_id)` | Optional method; `None` when unavailable |
 
 The measured Context curve uses turn token counts rather than another store
 query; `supports_context_curve` can opt out when those rows do not describe

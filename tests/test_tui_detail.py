@@ -1094,6 +1094,308 @@ def test_subagents_tab_header_is_click_sortable_and_shows_started():
     assert target == "subagent" and cols == rnd.SUBAGENT_SORT_COLUMNS
 
 
+def _subagent_app():
+    class NodeStore(FakeStore):
+        calls = 0
+
+        def workflow_nodes(self, wid):
+            self.calls += 1
+            return [
+                {
+                    "depth": depth,
+                    "agent": "explore",
+                    "model_name": "anthropic/claude-opus-4.5",
+                    "title": "Root"
+                    if depth == 0
+                    else "Inspect duplicate task " + "long title " * 10 + "THE END",
+                    "created_at": f"2026-06-01 12:0{i}:00",
+                    "cost": cost,
+                    "tokens_input": 100,
+                    "tokens_output": 200,
+                    "tokens_reasoning": 50,
+                    "tokens_cache_read": 800,
+                    "tokens_cache_write": 100,
+                    "tokens_cache_write_1h": 40,
+                    "tokens_total": 1250,
+                }
+                for i, (depth, cost) in enumerate(((0, 4), (1, 3), (2, 1), (1, 0)))
+            ]
+
+    args = type("Args", (), {"since": None, "until": None, "days": None})()
+    app = ot.App(
+        NodeStore(
+            [
+                workflow("A", "2026-06-01 12:00:00", directory="/a"),
+                workflow("B", "2026-06-01 13:00:00", directory="/a"),
+            ]
+        ),
+        args,
+    )
+    app.view = "session"
+    app.show_api_prices = False
+    app.tab = app.current_tabs().index("Subagents")
+    return app
+
+
+def test_subagent_execution_drill_navigation_and_snapshot_identity():
+    app = _subagent_app()
+    wf = app.current_session()
+    app.renderer.detail_subagents(wf, 120)
+    app.move(1)
+    assert app._subagent_selected == 2
+    app.scroll = 5
+    app.handle_key(None, 10)
+    assert app.active_subagent_drill == 2 and app.scroll == 0
+    app.move(1)
+    assert app.scroll == 1 and app.active_subagent_drill == 2
+    app.apply_header_sort("date", "subagent")
+    app.toggle_api_prices()
+    assert app.active_subagent_drill == 2
+    text = "\n".join(app.renderer.detail_subagents(wf, 90))
+    assert "12:02:00" in text and "12:01:00" not in text
+    app.handle_key(None, 27)
+    assert app.view == "session" and app.active_subagent_drill is None
+    assert app._subagent_selected == 2 and app._subagent_follow
+    app.jump(to_end=True)
+    rows = app.subagent_rows(wf)
+    assert app._subagent_selected == rows[-1]["_node_index"]
+    app.jump(to_end=False)
+    assert app._subagent_selected == rows[0]["_node_index"]
+    app.open_subagent_drill()
+    app._nodes_by_session.clear()
+    assert app.active_subagent_drill is None
+    app.open_subagent_drill()
+    app.workflow_index = 1
+    assert app.current_session().id != wf.id
+    assert app.active_subagent_drill is None
+
+
+def test_subagent_execution_detail_exposes_exact_tokens_and_wraps_full_title():
+    app = _subagent_app()
+    wf = app.current_session()
+    app.open_subagent_drill(0)
+    for width in (48, 76, 120, 180):
+        lines = app.renderer.detail_subagents(wf, width)
+        text = "\n".join(lines)
+        assert "THE END" in text and "Representative model:" in text
+        assert "80%" in text and "Recorded total: 1,250" in text
+        assert "of writes, 1h: 40" in text
+        assert "38%" in text and "75%" in text
+        for label in ("Input", "Output", "Reasoning", "Cache read", "Cache write"):
+            assert label in text
+        assert all(ot.display_width(line) <= width for line in lines)
+        assert app.renderer._subagent_header_at == {} and app.renderer._subagent_cursor_line is None
+    assert app.store.calls == 1  # details never load turns/content or refetch nodes
+
+
+def test_subagent_overview_delegation_totals_and_responsive_execution_table():
+    app = _subagent_app()
+    wf = app.current_session()
+    for width in (48, 76, 120, 180):
+        lines = app.renderer.detail_subagents(wf, width)
+        text = "\n".join(lines)
+        assert "3 executions" in text and "2 direct" in text
+        assert "By agent" in text and "By representative model" in text
+        assert "$4.00" in text and "50% of tree" in text
+        assert len(app.renderer._subagent_header_at) == 3
+        for line in app.renderer._subagent_header_at:
+            assert "$" in lines[line] and "Inspect" in lines[line]
+        assert all(ot.display_width(line) <= width for line in lines)
+
+
+def test_subagent_click_map_clears_in_detail_and_cursor_follows_scroll():
+    app = _subagent_app()
+    rnd = app.renderer
+    app.prefetch_session_data(app.current_session().id)
+    rnd.detail_subagents(app.current_session(), 120)
+    line = next(i for i, ordinal in rnd._subagent_header_at.items() if ordinal == 1)
+    app._apply_click(("subagentline", line), drill=False)
+    assert app.active_subagent_drill == 2
+    rnd.detail_subagents(app.current_session(), 120)
+    assert not rnd._subagent_header_at
+    app.handle_key(None, 27)
+    app.jump(to_end=True)
+    screen = FakeScreen(24, 120)
+    with patch.object(ot.curses, "color_pair", return_value=0):
+        rnd.draw_detail(screen, 0, 0, 20, 116)
+    assert app.scroll <= rnd._subagent_cursor_line < app.scroll + 16
+    assert any(region[:2] == ("rows", "subagentline") for region in rnd.regions)
+
+
+def test_subagent_back_only_consumes_visible_drill_and_empty_nodes_stay_safe():
+    app = _subagent_app()
+    app.open_subagent_drill()
+    app.tab = app.current_tabs().index("Overview")
+    app.handle_key(None, 27)
+    assert app.view != "session" and app.subagent_drill is not None
+    app = _subagent_app()
+    app._nodes_by_session[app.current_session().id] = []
+    assert not app.open_subagent_drill()
+    assert "No subagents" in "\n".join(app.renderer.detail_subagents(app.current_session(), 80))
+
+
+def test_subagent_zero_usage_has_no_invented_percentages():
+    app = _subagent_app()
+    for row in app.session_node_rows(app.current_session().id):
+        for key in row:
+            if key.startswith("tokens_") or key == "cost":
+                row[key] = 0
+    app.open_subagent_drill()
+    text = "\n".join(app.renderer.detail_subagents(app.current_session(), 100))
+    assert "Cache hit: -" in text and "Share of tree: - cost / - tokens" in text
+
+
+def test_subagent_table_tree_share_and_cursor_survive_reordering_and_reload():
+    app = _subagent_app()
+    wf = app.current_session()
+    rnd = app.renderer
+    lines = rnd.detail_subagents(wf, 180)
+    assert "38%" in lines[rnd._subagent_cursor_line]  # includes the root denominator
+    app.jump(to_end=True)
+    rnd.detail_subagents(wf, 180)
+    selected = app._subagent_selected
+    app._subagent_follow = False
+    app.apply_header_sort("date", "subagent")
+    assert app._subagent_follow and app._subagent_selected == selected
+    rnd.detail_subagents(wf, 180)
+    app._subagent_follow = False
+    app.apply_sort_choice("cost")
+    assert app._subagent_follow
+    rnd.detail_subagents(wf, 180)
+    app._subagent_follow = False
+    # Repricing can put the previously free execution ahead of the recorded rows.
+    app.session_node_rows(wf.id)[3]["tokens_input"] = 10_000_000
+    app.toggle_api_prices()
+    rnd.detail_subagents(wf, 180)
+    assert app._subagent_follow and app._subagent_selected == selected
+    app._subagent_follow = False
+    app.scroll = 80
+    app._nodes_by_session.clear()
+    rnd.detail_subagents(wf, 180)
+    assert app._subagent_follow and app.subagent_drill is None
+
+
+def test_subagent_drill_checks_do_not_fetch_and_removed_root_drill_stays_closed():
+    app = _subagent_app()
+    assert app.active_subagent_drill is None and app.store.calls == 0
+    wf = app.current_session()
+    with patch.object(app, "whatif_session_totals", return_value=(8, 10)):
+        app.whatif_model = "anthropic/claude-opus-4.5"
+        rows = app.subagent_rows(wf)
+        app.open_subagent_drill(next(i for i, row in enumerate(rows) if row["depth"] == 0))
+        assert app.active_subagent_drill == 0
+        app.whatif_model = None
+        app.renderer.detail_subagents(wf, 180)
+        assert app.active_subagent_drill is None
+        app.whatif_model = "anthropic/claude-opus-4.5"
+        app.subagent_rows(wf)
+        assert app.active_subagent_drill is None
+
+
+def _subagent_prompt_app():
+    app = _subagent_app()
+    wf = app.current_session()
+    for i, node in enumerate(app.session_node_rows(wf.id)):
+        node["id"] = f"child-{i}"
+    app.store.prompt_calls = []
+    store = app.store
+
+    def reader(root, child):
+        store.prompt_calls.append((root, child))
+        return (
+            f"Actual instructions for {child}\n\n    printf 'a  b'\n"
+            + "Full instructions " * 50
+            + "PROMPT END"
+        )
+
+    app.store.node_prompt = reader
+    return app
+
+
+def test_subagent_received_prompt_is_lazy_full_and_separate_from_title():
+    app = _subagent_prompt_app()
+    wf = app.current_session()
+    app.prefetch_session_data(wf.id)
+    app.renderer.detail_subagents(wf, 90)
+    assert app.store.prompt_calls == []
+    app.open_subagent_drill()
+    assert app.store.prompt_calls == []
+    shown = "\n".join(app.renderer.detail_subagents(wf, 90))
+    assert "Received prompt" in shown and "Loading received prompt" in shown
+    assert app.store.prompt_calls == []
+    app.load_subagent_prompt()
+    assert app.store.prompt_calls == [(wf.id, "child-1")]
+    text = app.subagent_prompt_text()
+    assert text.startswith("Actual instructions for child-1\n\n    printf 'a  b'")
+    for width in (48, 90, 150):
+        lines = app.renderer.detail_subagents(wf, width)
+        shown = "\n".join(lines)
+        assert "    printf 'a  b'" in shown and "PROMPT END" in shown
+        assert "Inspect duplicate task" in shown  # title did not become a prompt substitute
+        assert all(ot.display_width(line) <= width for line in lines)
+    assert len(app.store.prompt_calls) == 1
+    assert all("Actual instructions" not in str(node) for node in app.session_node_rows(wf.id))
+    app.apply_header_sort("date", "subagent")
+    assert app.subagent_prompt_text() == text
+    app.close_subagent_drill()
+    assert app._subagent_prompt is None and app._subagent_prompt_loading is None
+
+
+def test_subagent_received_prompt_cancels_stale_reads_and_never_reads_in_demo():
+    for change in ("session", "tab", "demo", "reload", "close"):
+        app = _subagent_prompt_app()
+        app.open_subagent_drill()
+        assert app.subagent_prompt_text() == "Loading received prompt..."
+        if change == "session":
+            app.workflow_index = 1
+        elif change == "tab":
+            app.tab = app.current_tabs().index("Overview")
+        elif change == "demo":
+            app.store.demo = True
+        elif change == "reload":
+            app._nodes_by_session.clear()
+        else:
+            app.close_subagent_drill()
+        app.load_subagent_prompt()
+        assert app.store.prompt_calls == [] and app._subagent_prompt is None
+    app = _subagent_prompt_app()
+    app.store.demo = True
+    app.open_subagent_drill()
+    assert "hidden in demo" in app.subagent_prompt_text()
+    assert app.read_node_prompt(app.current_session().id, {"id": "child-1", "depth": 1}) is None
+    assert app._subagent_prompt_loading is None and app.store.prompt_calls == []
+
+
+def test_subagent_received_prompt_errors_are_safe_and_reopening_retries():
+    app = _subagent_prompt_app()
+    app.open_subagent_drill()
+    with patch.object(app.store, "node_prompt", side_effect=OSError("sensitive source text")):
+        app.subagent_prompt_text()
+        app.load_subagent_prompt()
+    text = app.subagent_prompt_text()
+    assert "Could not read" in text and "sensitive source" not in text
+    app.close_subagent_drill()
+    app.open_subagent_drill()
+    app.subagent_prompt_text()
+    app.load_subagent_prompt()
+    assert "Actual instructions" in app.subagent_prompt_text()
+
+
+def test_subagent_received_prompt_routes_to_root_owner_not_child_id():
+    app = _subagent_prompt_app()
+    child_store = app.store
+    app.store = ot.CombinedStore([child_store])
+    app.store.workflows()  # register root ownership, never native child IDs
+    wf = app.current_session()
+    node = app.session_node_rows(wf.id)[1]
+    assert "Actual instructions for child-1" in app.read_node_prompt(wf.id, node)
+    assert child_store.prompt_calls == [(wf.id, "child-1")]
+    assert app.read_node_prompt(wf.id, {"depth": 1}) is None
+    assert app.read_node_prompt("not-loaded", node) is None
+    app.loaded.append(wf)
+    assert app.read_node_prompt(wf.id, node) is None
+
+
 def test_month_and_day_views_have_projects_tab():
     app = app_with([workflow("a", "2026-06-01 12:00:00")])
 

@@ -1,5 +1,6 @@
 import os
 import tempfile
+from unittest.mock import patch
 
 import opentab as ot
 
@@ -15,6 +16,90 @@ from tests._support import (
     _omp_write,
     _omp_write_subagent,
 )
+
+
+def test_omp_node_prompt_uses_native_uuid_and_own_prompt_not_title_without_usage():
+    child = "019fa4fd-aaaa-7000-a6e9-c9e0c7ce25fc"
+    sibling = "019fa4fd-bbbb-7000-a6e9-c9e0c7ce25fc"
+    nested = "019fa4fd-cccc-7000-a6e9-c9e0c7ce25fc"
+    empty = "019fa4fd-dddd-7000-a6e9-c9e0c7ce25fc"
+    outside = "019fa4fd-eeee-7000-a6e9-c9e0c7ce25fc"
+    prompt = (
+        "  Implement exactly the following detailed request.\n\n"
+        + ("  Preserve this indented instruction in full.\n" * 12)
+        + "Verify all of it.\n"
+    )
+    ts_prefix = "2026-07-27T19-11-52-093Z"
+    with tempfile.TemporaryDirectory() as tmp:
+        _omp_write(
+            tmp, "project", OMP_SID, [_omp_session(OMP_SID, tmp), _omp_user("Root instruction")]
+        )
+        _omp_write(
+            tmp, "project", outside, [_omp_session(outside, tmp), _omp_user("Outside instruction")]
+        )
+        for sid, nickname, text, chain in (
+            (child, "Scout", prompt, ()),
+            (sibling, "Reviewer", "Sibling\nprompt", ()),
+            (nested, "Worker", "Nested prompt", ("Scout",)),
+            (empty, "Empty", " \n\t", ()),
+        ):
+            _omp_write_subagent(
+                tmp,
+                "project",
+                ts_prefix,
+                OMP_SID,
+                nickname,
+                [
+                    _omp_session(sid, tmp, title="Misleading session title"),
+                    _omp_title_record("Misleading summary", changed=True),
+                    _omp_user("\n\t", mid="blank"),
+                    _omp_user(text),
+                    *([] if sid == empty else [_omp_user("Later prompt", mid="later")]),
+                ],
+                chain=chain,
+            )
+        store = ot.OmpStore(tmp, _omp_args())
+        assert store.workflows() == []
+        assert store.node_prompt(OMP_SID, child) == prompt
+        assert store.node_prompt(OMP_SID, sibling) == "Sibling\nprompt"
+        assert store.node_prompt(OMP_SID, nested) == "Nested prompt"
+        for workflow_id, node_id in (
+            (OMP_SID, OMP_SID),
+            (OMP_SID, outside),
+            (OMP_SID, empty),
+            (OMP_SID, "Scout"),
+            (OMP_SID, child[:8]),
+            (OMP_SID, "missing"),
+            ("missing", child),
+            (child, sibling),
+        ):
+            assert store.node_prompt(workflow_id, node_id) is None
+        assert store.workflows() == []
+        store.demo = True
+        with patch.object(store, "_parse", side_effect=AssertionError("demo read content")):
+            assert store.node_prompt(OMP_SID, child) is None
+
+
+def test_omp_node_prompt_refuses_a_uuid_recorded_under_different_roots():
+    other = "019fa4fd-eeee-7000-a6e9-c9e0c7ce25fc"
+    child = "019fa4fd-aaaa-7000-a6e9-c9e0c7ce25fc"
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, root in enumerate((OMP_SID, other)):
+            _omp_write(tmp, "project", root, [_omp_session(root, tmp)])
+            _omp_write_subagent(
+                tmp,
+                "project",
+                "2026-07-27T19-11-52-093Z",
+                root,
+                "Scout",
+                [
+                    _omp_session(child, tmp),
+                    _omp_user(f"Private prompt from root {i}"),
+                ],
+            )
+        store = ot.OmpStore(tmp, _omp_args())
+        assert store.node_prompt(OMP_SID, child) is None
+        assert store.node_prompt(other, child) is None
 
 
 def test_omp_subagent_transcript_is_never_silently_dropped():
@@ -96,6 +181,7 @@ def test_omp_root_session_folds_subagent_into_totals_and_root_cost_is_its_own_sh
             "RepoPurposeScout",
             [
                 _omp_session(child_sid, cwd),
+                _omp_user("  Received child task\n\n  Keep this indentation.\n"),
                 _omp_assistant(
                     "claude-opus-4-6", 5000, 300, provider="anthropic", cost=0.15, mid="c1"
                 ),
@@ -120,6 +206,11 @@ def test_omp_root_session_folds_subagent_into_totals_and_root_cost_is_its_own_sh
         assert nodes[1]["depth"] == 1 and nodes[1]["agent"] == "RepoPurposeScout"
         assert nodes[1]["id"] == child_sid
         assert nodes[1]["cost"] == 0.15  # the child's own (leaf) total
+        assert all("prompt" not in n and "prompt_full" not in n for n in nodes)
+        with patch.object(store, "_parse", side_effect=AssertionError("unnecessary reparse")):
+            assert store.node_prompt(OMP_SID, child_sid) == (
+                "  Received child task\n\n  Keep this indentation.\n"
+            )
 
 
 def test_omp_model_breakdown_keeps_root_vs_subtree_split_under_subscription():

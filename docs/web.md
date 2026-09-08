@@ -84,6 +84,47 @@ Both sides use list rates, not the recorded bill. The sidebar, rollups, Trends a
 Prices remain unchanged, and `$` still works independently. Press `w` again to
 clear the target. It works in demo and is never remembered between visits.
 
+## Subagent executions
+
+**Subagents** works in static and live reports; its overview and tables use only
+the embedded node metrics.
+Its delegation overview counts direct (depth 1) and nested (depth >1) executions,
+shows maximum depth, and groups delegated work by the recorded agent label. Cost
+and token shares use the sum of all nodes, including root, not session rollups.
+Zero denominators display `-`; the flamegraph still falls back to token widths
+when no node records spend.
+
+Click an execution to read its wrapped full title, agent, representative model,
+start, depth, current-mode cost/share and exact token categories and recorded total.
+Cache hit is cache read divided by input + cache read + cache write; the 1h write
+count is a subset, not extra tokens. Categories need not add up to the recorded
+total. A representative model is not the execution's full model mix: `w` still
+compares list-rate baselines only at session level, with per-node target costs but
+no per-node savings. `$` updates costs and shares independently.
+
+Tables scroll horizontally on small screens; detail text wraps. `Tab` uses native
+focus within this tab; focused execution rows support `j`/`k` or arrows and
+`Enter`/Space. **Back to executions**, `Esc`, or browser Back returns from detail
+to the list without leaving the session. Selection uses the original payload
+index, so duplicate/anonymous titles, sorting and price toggles cannot select a
+different execution. Detail is not a shareable deep link, and no node IDs, raw
+content, invented parent relationships, status, duration or turn links are added
+to the embedded node metrics.
+
+In a **live report**, opening one execution separately loads its **Received prompt**:
+the first recorded user message in that execution (the child session for a subagent),
+not the complete system prompt or context payload. The **Title** remains separately
+labeled and is never used as a prompt fallback. Loading is explicit; available text
+is shown in full, preserving whitespace and wrapping long lines. Static reports,
+demo mode, unsupported nodes and unavailable local records explicitly say the prompt
+is not available. Remote executions do not trigger network or SSH content reads.
+
+Only the selected prompt is kept in browser memory, not browser storage or the report
+payload. Navigation clears it and cancels pending work; responses for an old session,
+execution or page snapshot cannot replace the current selection. A server reload or
+machine refresh that invalidates the page also expires its execution indices: refresh
+an older browser tab before requesting more prompts.
+
 ## Served live
 
 `opentab web` serves the browser on `http://localhost:8321` (`--port` changes the
@@ -104,7 +145,8 @@ See [fleet refresh](machines.md#refresh-and-offline-history) for the distinction
 
 The server binds to **localhost only** by default and has no authentication.
 Anyone who can reach it can read session titles, project paths, spend and, through
-live Turns, full user prompts. Raw turn traces and authored notes are not served.
+live Turns and explicitly opened Subagent executions, full recorded user prompts.
+Raw turn traces and authored notes are not served.
 If you need access from another machine, use a private VPN such as Tailscale and
 restrict who can reach the port (`--bind` warns beyond localhost), never a public
 interface. Reachable clients can also request reloads and saved-machine refreshes.
@@ -146,5 +188,14 @@ it in the browser. Keep these boundaries when adding a field or interaction:
   live extras honor per-session capabilities. Reload (`/api/reload`) and remote
   refresh (`/api/refresh`) are POST-only. Refresh accepts one nonempty machine name,
   never an arbitrary URL or shell command from the browser, and demo blocks it.
+- **Execution prompts are opt-in.** Only `GET /api/node-prompt?session=<id>&node=<index>&snapshot=<nonce>`
+  calls `App.read_node_prompt`, never payload building, session extras or prefetch.
+  The live page adds a transient `meta.nodeSnapshot` nonce, retained only until page
+  invalidation. The endpoint requires the current nonce and one unique workflow,
+  then resolves the ordinal against the same memoized `session_node_rows` sequence
+  used for the payload. Responses contain `text` (a string or null), with safe error
+  text when needed, and are not cacheable. Demo is rejected before any reader call;
+  existing Host protection applies. Neither raw node IDs nor received prompt text
+  enter static/fleet payloads.
 
 Check static and live views together, including a session with no optional detail.

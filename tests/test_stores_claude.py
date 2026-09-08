@@ -339,6 +339,210 @@ def _claude_user(text, *, cwd, meta=False, side=False, uuid="u"):
     }
 
 
+def _claude_prompt_run(tmp, run="12345678-first", content="received task"):
+    path = os.path.join(tmp, "s1.jsonl")
+    rows = [
+        _claude_user("parent prompt, not the subagent task", cwd=tmp, uuid="main"),
+        dict(_claude_user(content, cwd=tmp, side=True, uuid=run), parentUuid="main"),
+        _claude_msg(
+            "s1",
+            "claude-opus-4-8",
+            _usage(10, 5),
+            uuid="answer",
+            cwd=tmp,
+            parent=run,
+            side=True,
+        ),
+    ]
+    _write_jsonl(path, rows)
+    return ot.ClaudeStore(tmp, _claude_args()), path, rows
+
+
+def test_claude_node_prompt_reads_full_initial_message_with_exact_sibling_grouping():
+    for sidecars in (False, True):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = "  first paragraph\n\n" + "full task " * 100
+            last = "\nlast paragraph\n\n"
+            content = [
+                {"type": "text", "text": first},
+                {"type": "image", "source": {"data": "not text"}},
+                {"type": "text", "text": last},
+            ]
+            store, path, rows = _claude_prompt_run(tmp, content=content)
+            followup = dict(
+                _claude_user("later follow-up", cwd=tmp, side=True, uuid="followup"),
+                parentUuid="answer",
+            )
+            # A second assistant linked through a user record still belongs to run 1.
+            continuation = _claude_msg(
+                "s1",
+                "claude-opus-4-8",
+                _usage(20, 5),
+                uuid="continued",
+                cwd=tmp,
+                parent="followup",
+                side=True,
+            )
+            sibling = dict(
+                _claude_user("sibling task", cwd=tmp, side=True, uuid="87654321-second"),
+                parentUuid="main",
+            )
+            sibling_answer = _claude_msg(
+                "s1",
+                "claude-opus-4-8",
+                _usage(30, 5),
+                uuid="sibling-answer",
+                cwd=tmp,
+                parent="87654321-second",
+                side=True,
+            )
+            title = {"type": "custom-title", "sessionId": "s1", "title": "misleading title"}
+            if sidecars:
+                side_dir = os.path.join(tmp, "s1", "subagents")
+                os.makedirs(side_dir)
+                _write_jsonl(path, [rows[0], title])
+                _write_jsonl(
+                    os.path.join(side_dir, "agent-wrong-label.jsonl"),
+                    rows[1:] + [followup, continuation],
+                )
+                _write_jsonl(os.path.join(side_dir, "agent-other.jsonl"), [sibling, sibling_answer])
+            else:
+                # Identical timestamps, interleaved siblings, and reversed user order
+                # must not affect UUID-based ownership of either received task.
+                _write_jsonl(
+                    path,
+                    [rows[0], followup, sibling, *rows[1:], sibling_answer, continuation, title],
+                )
+            assert store.workflows()[0].title == "misleading title"
+            before = store.workflow_nodes("s1")
+            children = {n["id"]: n for n in before if n["depth"] == 1}
+            assert set(children) == {"12345678", "87654321"}
+            assert children["12345678"]["tokens_total"] == 40
+            assert store.node_prompt("s1", "12345678") == first + "\n\n" + last
+            assert store.node_prompt("s1", "87654321") == "sibling task"
+            assert store.workflow_nodes("s1") == before
+            assert all(n["title"] == "subagent run" for n in children.values())
+            assert first not in repr(before) and store._trace_one is None
+            assert store._sessions["s1"]["content"] == {}
+
+
+def test_claude_node_prompt_refuses_colliding_public_prefixes():
+    with tempfile.TemporaryDirectory() as tmp:
+        store, path, rows = _claude_prompt_run(tmp)
+        other = dict(rows[1], uuid="12345678-second", message={"content": "other task"})
+        answer = _claude_msg(
+            "s1",
+            "claude-opus-4-8",
+            _usage(5, 5),
+            uuid="other-answer",
+            cwd=tmp,
+            parent=other["uuid"],
+            side=True,
+        )
+        for records in (rows + [other, answer], [other, answer] + rows):
+            _write_jsonl(path, records)
+            assert [n["id"] for n in store.workflow_nodes("s1")[1:]] == ["12345678"] * 2
+            assert store.node_prompt("s1", "12345678") is None
+            assert store.node_prompt("s1", "12345678-first") is None
+
+
+def test_claude_node_prompt_requires_the_initial_user_message():
+    for content in (None, "", "\n  ", [{"type": "tool_result", "content": "not a task"}]):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _path, _rows = _claude_prompt_run(tmp, content=content)
+            assert store.node_prompt("s1", "12345678") is None
+    with tempfile.TemporaryDirectory() as tmp:
+        store, path, rows = _claude_prompt_run(tmp)
+        later = dict(
+            _claude_user("not the initial prompt", cwd=tmp, side=True, uuid="later"),
+            parentUuid="answer",
+        )
+        _write_jsonl(path, [rows[0], rows[2], later])
+        assert store.node_prompt("s1", "answer") is None
+        assert store.node_prompt("s1", "12345678") is None
+
+
+def test_claude_node_prompt_validates_session_and_node_identity():
+    with tempfile.TemporaryDirectory() as tmp:
+        store, path, rows = _claude_prompt_run(tmp)
+        # Another session's record with the same UUID must never provide the text.
+        foreign = dict(rows[1], sessionId="s2", message={"content": "foreign task"})
+        _write_jsonl(os.path.join(tmp, "s2.jsonl"), [foreign])
+        _write_jsonl(path, [foreign] + rows)
+        assert store.node_prompt("s1", "12345678") == "received task"
+        for sid, nid in (
+            ("s1", "s1"),
+            ("s1", "1234"),
+            ("s1", "answer"),
+            ("s2", "12345678"),
+            ("missing", "12345678"),
+        ):
+            assert store.node_prompt(sid, nid) is None
+        _write_jsonl(os.path.join(tmp, "wrong-name.jsonl"), rows)
+        assert store.node_prompt("wrong-name", "12345678") is None
+        assert store._sessions is None and store._one is None
+
+
+def test_claude_node_prompt_refuses_an_unreadable_sidecar():
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store, path, rows = _claude_prompt_run(tmp)
+        side_dir = os.path.join(tmp, "s1", "subagents")
+        os.makedirs(side_dir)
+        _write_jsonl(os.path.join(side_dir, "agent-unreadable.jsonl"), [])
+        # read_files_parallel skips unreadable files. Even a seemingly unique run
+        # is unsafe when another sidecar could hide a short-prefix collision.
+        with patch(
+            "opentab.stores.claude.read_files_parallel",
+            return_value=[(path, "\n".join(json.dumps(row) for row in rows))],
+        ):
+            assert store.node_prompt("s1", "12345678") is None
+
+
+def test_claude_node_prompt_rejects_conflicting_copies_and_cycles():
+    with tempfile.TemporaryDirectory() as tmp:
+        store, path, rows = _claude_prompt_run(tmp)
+        _write_jsonl(path, rows + [rows[1]])
+        assert store.node_prompt("s1", "12345678") == "received task"
+        for conflict in (
+            dict(rows[1], message={"content": "different task"}),
+            dict(rows[2], parentUuid="main"),
+            dict(rows[1], isSidechain=False),
+        ):
+            _write_jsonl(path, rows + [conflict])
+            assert store.node_prompt("s1", "12345678") is None
+        _write_jsonl(path, [rows[0], dict(rows[1], parentUuid="answer"), rows[2]])
+        assert store.node_prompt("s1", "12345678") is None
+
+
+def test_claude_node_prompt_demo_and_replay_gates_precede_content_read():
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store, path, rows = _claude_prompt_run(tmp)
+        assert store.node_prompt("s1", "12345678") == "received task"
+        store.demo = True
+        with patch("builtins.open", side_effect=AssertionError("demo must not read")):
+            assert store.node_prompt("s1", "12345678") is None
+        store.demo = False
+        for sidecar in (False, True):
+            _write_jsonl(path, rows)
+            marker = {"sessionId": "s1", "sessionKind": "background"}
+            if sidecar:
+                side_dir = os.path.join(tmp, "s1", "subagents")
+                os.makedirs(side_dir)
+                _write_jsonl(os.path.join(side_dir, "agent-replay.jsonl"), [marker])
+            else:
+                _write_jsonl(path, rows + [marker])
+            assert not store.supports_turn_content("s1")
+            with patch(
+                "opentab.stores.claude.read_files_parallel",
+                side_effect=AssertionError("replay must not read content"),
+            ):
+                assert store.node_prompt("s1", "12345678") is None
+
+
 def test_claude_title_skips_injected_command_and_meta_messages():
     with tempfile.TemporaryDirectory() as tmp:
         root = os.path.join(tmp, "projects", "slug")

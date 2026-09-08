@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+from unittest.mock import patch
 
 import opentab as ot
 from opentab.formatting import iso_to_local
@@ -45,6 +46,85 @@ def _codex_item(kind, ts="2025-10-03T14:51:15.000Z", **fields):
 def _codex_rollout(root, sid, rows):
     # Codex files are named rollout-<ts>-<uuid>.jsonl; the uuid is the session id.
     _write_jsonl(os.path.join(root, f"rollout-2025-10-03T16-51-03-{sid}.jsonl"), rows)
+
+
+def test_codex_node_prompt_reads_exact_child_user_events_without_usage():
+    ids = [str(i) * 8 + "-1111-1111-1111-111111111111" for i in range(1, 8)]
+    root, child, sibling, grandchild, outside, empty, injected = ids
+    prompt = (
+        "  Review the implementation, not this misleading task label.\n"
+        + ("  Keep indentation and the complete detailed instruction.\n" * 12)
+        + "Finish with a concrete test plan.\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        for sid, parent, events in (
+            (root, None, [_codex_user("Root prompt must never leak")]),
+            (child, root, [_codex_user(" \n\t"), _codex_user(prompt), _codex_user("Later prompt")]),
+            (
+                sibling,
+                root,
+                [
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "item_completed",
+                            "item": {
+                                "type": "UserMessage",
+                                "content": [{"type": "text", "text": "Sibling\nreceived prompt"}],
+                            },
+                        },
+                    }
+                ],
+            ),
+            (grandchild, child, [_codex_user("Nested instruction")]),
+            (outside, None, [_codex_user("Outside workflow prompt")]),
+            (empty, root, []),
+            (injected, root, []),
+        ):
+            source = (
+                {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent,
+                            "agent_nickname": "Misleading task label",
+                        }
+                    }
+                }
+                if parent
+                else "cli"
+            )
+            rows = [_codex_meta(sid, tmp, source=source)]
+            if sid in (child, injected):
+                rows.append(
+                    _codex_item(
+                        "message",
+                        role="user",
+                        content=[
+                            {"type": "input_text", "text": "Injected instructions, not a prompt"}
+                        ],
+                    )
+                )
+            _codex_rollout(tmp, sid, rows + events)
+        store = ot.CodexStore(tmp, type("Args", (), {"demo": False})())
+        assert store.workflows() == []  # No usage/assistant rows needed for content.
+        assert store.node_prompt(root, child) == prompt
+        assert store.node_prompt(root, sibling) == "Sibling\nreceived prompt"
+        assert store.node_prompt(root, grandchild) == "Nested instruction"
+        for workflow_id, node_id in (
+            (root, root),
+            (root, outside),
+            (root, empty),
+            (root, injected),
+            (root, child[:8]),
+            (root, "missing"),
+            ("missing", child),
+            (child, sibling),
+        ):
+            assert store.node_prompt(workflow_id, node_id) is None
+        assert store.workflows() == []  # Content reads do not widen accounting.
+        store.demo = True
+        with patch.object(store, "_parse", side_effect=AssertionError("demo read content")):
+            assert store.node_prompt(root, child) is None
 
 
 def test_codex_store_dedupes_echo_attributes_models_and_rolls_up_to_git_root():
@@ -616,6 +696,7 @@ def test_codex_spawned_threads_fold_into_a_subagent_tree():
             child_sid,
             [
                 _codex_meta(child_sid, cwd, source=spawn),
+                _codex_user("  Received child task\n\n  Keep this indentation.\n"),
                 _codex_turn("gpt-5-codex", cwd, ts="2025-10-03T14:52:00.000Z"),
                 _codex_call("shell_command", ts="2025-10-03T14:52:05.000Z"),
                 _codex_tokens(400, 100, 0, 500, ts="2025-10-03T14:52:10.000Z"),
@@ -630,6 +711,11 @@ def test_codex_spawned_threads_fold_into_a_subagent_tree():
         nodes = store.workflow_nodes(parent_sid)
         assert [(n["depth"], n["agent"]) for n in nodes] == [(0, "-"), (1, "researcher")]
         assert nodes[1]["id"] == child_sid and nodes[1]["tokens_total"] == 500
+        assert all("prompt" not in n and "prompt_full" not in n for n in nodes)
+        with patch.object(store, "_parse", side_effect=AssertionError("unnecessary reparse")):
+            assert store.node_prompt(parent_sid, child_sid) == (
+                "  Received child task\n\n  Keep this indentation.\n"
+            )
         # model rows: total covers the subtree, root_* only the parent's own share
         mrow = [r for r in store.model_breakdown() if r["root_id"] == parent_sid]
         assert len(mrow) == 1 and mrow[0]["tokens_total"] == 1700
@@ -1034,3 +1120,22 @@ def test_a_fully_archived_codex_install_is_still_discovered():
         # ...and selecting it explicitly must not be refused for a missing sessions/.
         store, _loading = ot.sources.make_store(args, "codex")
         assert [w.id for w in store.workflows()] == [CODEX_SID]
+
+
+def test_codex_node_prompt_refuses_conflicting_resumed_parent_claims():
+    first, second, child = (str(i) * 8 + "-1111-1111-1111-111111111111" for i in (1, 2, 3))
+    with tempfile.TemporaryDirectory() as tmp:
+        for root in (first, second):
+            _codex_rollout(tmp, root, [_codex_meta(root, tmp)])
+        for i, root in enumerate((first, second)):
+            source = {"subagent": {"thread_spawn": {"parent_thread_id": root}}}
+            _write_jsonl(
+                os.path.join(tmp, f"rollout-2025-10-0{i+3}-{child}.jsonl"),
+                [
+                    _codex_meta(child, tmp, source=source),
+                    _codex_user(f"Private prompt from root {i}", ts=f"2025-10-0{4-i}T10:00:00Z"),
+                ],
+            )
+        store = ot.CodexStore(tmp, type("Args", (), {"demo": False})())
+        assert store.node_prompt(first, child) is None
+        assert store.node_prompt(second, child) is None
