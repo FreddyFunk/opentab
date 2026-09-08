@@ -429,6 +429,11 @@ table.prices .tag{color:var(--mut);font-size:11px;margin-left:7px}
 .wn-head{display:flex;flex:none;align-items:center;gap:12px;padding:17px 26px;border-bottom:1px solid var(--line)}
 .wn-head h2{font-size:16px;color:var(--ink);margin:0}
 .wn-version{color:var(--accent);font-size:12px}
+.wn-nav{display:flex;align-items:center;justify-content:center;gap:8px;margin-left:auto}
+.wn-nav button{font:inherit;font-size:10.5px;padding:4px 7px;border:1px solid var(--line);
+  border-radius:4px;background:var(--bg);color:var(--ink2);cursor:pointer}
+.wn-nav button:hover:not(:disabled),.wn-nav button:focus-visible{color:var(--accent);border-color:var(--accent);outline:none}
+.wn-nav button:disabled{color:var(--mut);cursor:default;opacity:.45}.wn-position{color:var(--mut);font-size:10.5px;min-width:3ch;text-align:center}
 .wn-head .wn-close{margin-left:auto}
 .wn-close{flex:none;font:inherit;font-size:11px;padding:5px 9px;border:1px solid var(--line);
   border-radius:4px;background:var(--bg);color:var(--ink2);cursor:pointer}
@@ -442,13 +447,15 @@ table.prices .tag{color:var(--mut);font-size:11px;margin-left:7px}
 .wn-availability{font-size:10px;color:var(--mut);white-space:nowrap}
 .wn-hint{color:var(--mut);font-size:11px;margin-top:2px}
 .wn-foot{display:flex;flex:none;justify-content:space-between;gap:16px;align-items:center;padding:13px 26px;border-top:1px solid var(--line)}
+.wn-foot .wn-nav{margin-left:0}
 .wn-foot a{font-size:11px}.wn-keys{color:var(--mut);font-size:10.5px;text-align:right}
 .wn-unavailable{color:var(--ink2)}
 @media (max-width:600px){
   #hright{width:100%;justify-content:flex-start;margin-left:0}
   #whats-new{padding:12px}.wn-panel{max-height:92vh}.wn-scroll{padding:18px}
-  .wn-head{padding:14px 18px;gap:9px}.wn-head h2{font-size:14px}
-  .wn-foot{padding:12px 18px}.wn-keys{display:none}
+  .wn-head{padding:14px 18px;gap:9px;flex-wrap:wrap}.wn-head h2{font-size:14px}
+  .wn-head .wn-nav{order:3;width:100%;margin-left:0}.wn-foot{padding:12px 18px;flex-wrap:wrap}.wn-keys{display:none}
+  .wn-foot .wn-release{width:100%;text-align:center}.wn-foot .wn-nav{width:100%}
 }
 
 .meta{display:grid;grid-template-columns:auto 1fr;gap:2px 16px;font-size:12px;margin-bottom:2px}
@@ -467,6 +474,7 @@ let STARTUP_WARNINGS = (DATA.warnings || []).slice();
 const WHATS_NEW = DATA.whatsNew || {};
 let WHATS_NEW_OPEN = false;
 let WHATS_NEW_RETURN = null;
+let WHATS_NEW_INDEX = 0;
 // Range filtering must not hide a directly linked session.
 const ALL_W = DATA.workflows;
 let W = ALL_W;
@@ -541,6 +549,7 @@ function renderStartupWarning() {
 function openWhatsNew(invoker) {
   WHATS_NEW_RETURN = invoker || document.activeElement;
   WHATS_NEW_OPEN = true;
+  WHATS_NEW_INDEX = 0;
   renderWhatsNew();
 }
 function closeWhatsNew() {
@@ -549,18 +558,36 @@ function closeWhatsNew() {
   if (WHATS_NEW_RETURN && typeof WHATS_NEW_RETURN.focus === 'function') WHATS_NEW_RETURN.focus();
   WHATS_NEW_RETURN = null;
 }
-function renderWhatsNew() {
+function stepWhatsNew(step, focusAction) {
+  const releases = WHATS_NEW.releases || [];
+  const next = Math.max(0, Math.min(releases.length - 1, WHATS_NEW_INDEX + step));
+  if (next === WHATS_NEW_INDEX) return;
+  WHATS_NEW_INDEX = next;
+  renderWhatsNew(focusAction);
+}
+function whatsNewNav() {
+  const count = (WHATS_NEW.releases || []).length;
+  return h('div', { class: 'wn-nav', 'aria-label': 'Release history' },
+    h('button', { type: 'button', 'data-wn': 'newer', disabled: WHATS_NEW_INDEX <= 0 ? '' : null,
+      onclick: () => stepWhatsNew(-1, 'newer'), 'aria-label': 'Next release', title: 'Newer release (h / Left)' }, '← Newer'),
+    h('span', { class: 'wn-position', 'aria-live': 'polite' }, count ? (WHATS_NEW_INDEX + 1) + '/' + count : '0/0'),
+    h('button', { type: 'button', 'data-wn': 'older', disabled: WHATS_NEW_INDEX + 1 >= count ? '' : null,
+      onclick: () => stepWhatsNew(1, 'older'), 'aria-label': 'Previous release', title: 'Older release (l / Right)' }, 'Older →'));
+}
+function renderWhatsNew(focusAction) {
   const host = document.getElementById('whats-new');
   if (!WHATS_NEW_OPEN) { host.hidden = true; host.textContent = ''; return; }
   host.hidden = false; host.textContent = '';
+  const release = (WHATS_NEW.releases || [])[WHATS_NEW_INDEX] || null;
   const close = h('button', { class: 'wn-close', onclick: closeWhatsNew,
     title: "Close What's New", 'aria-label': "Close What's New" }, 'esc  ✕');
   const top = h('div', { class: 'wn-head' },
     h('h2', { id: 'wn-title' }, "What's New"),
-    h('span', { class: 'wn-version' }, 'v' + (WHATS_NEW.version || META.version)), close);
+    h('span', { class: 'wn-version' }, 'v' + (release ? release.version : META.version)),
+    whatsNewNav(), close);
   const content = [];
-  if (!WHATS_NEW.unavailable) {
-    for (const section of WHATS_NEW.sections || []) {
+  if (!WHATS_NEW.unavailable && release) {
+    for (const section of release.sections || []) {
       const items = section.items.map(item => h('li', { class: 'wn-item' },
         h('span', null, item.text),
         item.availability && item.availability !== 'both'
@@ -571,13 +598,16 @@ function renderWhatsNew() {
     }
   } else content.push(h('p', { class: 'wn-unavailable' }, 'The bundled highlights do not match this installation.'));
   const footer = h('div', { class: 'wn-foot' },
-    h('a', { class: 'wn-release', href: WHATS_NEW.release_url, target: '_blank', rel: 'noopener noreferrer' }, 'Read the full release ↗'),
-    h('span', { class: 'wn-keys' }, 'j/k scroll · Esc close'));
+    h('a', { class: 'wn-release', href: release ? release.release_url : WHATS_NEW.release_url,
+      target: '_blank', rel: 'noopener noreferrer' }, 'Read the full release ↗'),
+    whatsNewNav(),
+    h('span', { class: 'wn-keys' }, 'h/l releases · j/k scroll'));
   const scroll = h('div', { class: 'wn-scroll' }, content);
   const panel = h('div', { class: 'wn-panel' }, top, scroll, footer);
   panel.addEventListener('click', e => e.stopPropagation());
   host.appendChild(panel);
-  close.focus();
+  const focus = focusAction && host.querySelector('[data-wn="' + focusAction + '"]:not([disabled])');
+  (focus || close).focus();
 }
 
 let TAB = 'Overview';
@@ -2942,7 +2972,7 @@ document.addEventListener('keydown', e => {
   }
   if (WHATS_NEW_OPEN) {
     const body = document.querySelector('#whats-new .wn-scroll');
-    const controls = Array.from(document.querySelectorAll('#whats-new button, #whats-new a[href]'));
+    const controls = Array.from(document.querySelectorAll('#whats-new button:not([disabled]), #whats-new a[href]'));
     if ((e.key === 'Enter' || e.key === ' ') && controls.includes(e.target)) return;
     if (e.key === 'Tab' && controls.length) {
       const current = controls.indexOf(document.activeElement);
@@ -2950,6 +2980,8 @@ document.addEventListener('keydown', e => {
       controls[(current + step + controls.length) % controls.length].focus();
     }
     else if (e.key === 'Escape' || e.key === 'q' || e.key === 'W') closeWhatsNew();
+    else if (e.key === 'h' || e.key === 'ArrowLeft') stepWhatsNew(-1, 'newer');
+    else if (e.key === 'l' || e.key === 'ArrowRight') stepWhatsNew(1, 'older');
     else if (body && (e.key === 'j' || e.key === 'ArrowDown')) body.scrollBy(0, 56);
     else if (body && (e.key === 'k' || e.key === 'ArrowUp')) body.scrollBy(0, -56);
     else if (body && e.key === 'PageDown') body.scrollBy(0, body.clientHeight * .75);

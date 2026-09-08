@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import opentab as ot
 
 from tests._support import AttrScreen, FakeScreen, _model_row, app_with, screen_text, workflow
@@ -60,6 +62,62 @@ def test_whats_new_opens_from_main_and_help_then_returns_to_its_caller():
     assert not app.whats_new and app.help
 
 
+def test_whats_new_history_stops_at_bounds_resets_scroll_and_reopens_current():
+    app = _keymap_app()
+    app.open_whats_new()
+    assert app.whats_new_index == 0
+    app.whats_new_scroll = 9
+    app.handle_key(None, ord("h"))
+    assert app.whats_new_index == 0 and app.whats_new_scroll == 9
+    app.handle_key(None, ord("l"))
+    assert app.whats_new_index == 1 and app.whats_new_scroll == 0
+    for _ in range(20):
+        app.handle_key(None, ot.curses.KEY_RIGHT)
+    assert app.whats_new_index == len(app.whats_new_history) - 1
+    app.whats_new_scroll = 4
+    app.handle_key(None, ord("l"))
+    assert app.whats_new_index == len(app.whats_new_history) - 1
+    assert app.whats_new_scroll == 4
+    app.handle_key(None, ot.curses.KEY_LEFT)
+    assert app.whats_new_index == len(app.whats_new_history) - 2
+    app.handle_key(None, ord("h"))
+    assert app.whats_new_index == len(app.whats_new_history) - 3
+    app.handle_key(None, 27)
+    app.open_whats_new()
+    assert app.whats_new_index == 0 and app.whats_new_scroll == 0
+
+
+def test_whats_new_history_uses_remapped_navigation_and_opens_the_viewed_release():
+    app = _keymap_app()
+    app.keymap = ot.tui.bindings.Keymap(
+        {
+            ("whats-new", "older"): ["n"],
+            ("whats-new", "newer"): ["p"],
+        }
+    )
+    app.open_whats_new()
+    app.handle_key(None, ord("h"))
+    assert app.whats_new_index == 0
+    app.handle_key(None, ord("n"))
+    viewed = app.whats_new_notes
+    assert viewed is not None and app.whats_new_index == 1
+    screen = FakeScreen(24, 80)
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: n
+        app.renderer.draw_whats_new(screen, 2, 23, 80)
+    finally:
+        ot.curses.color_pair = original
+    footer = screen_text(screen)
+    assert "n older" in footer and "p newer" in footer
+    assert f"2/{len(app.whats_new_history)}" in footer
+    with patch("opentab.tui.app.open_path", return_value=True) as opened:
+        app.handle_key(None, ord("o"))
+    opened.assert_called_once_with(viewed["release_url"])
+    app.handle_key(None, ord("p"))
+    assert app.whats_new_index == 0
+
+
 def test_whats_new_uses_remapped_keys_and_swallows_mouse_clicks():
     app = _keymap_app()
     app.keymap = ot.tui.bindings.Keymap(
@@ -107,7 +165,9 @@ def test_whats_new_renders_compact_release_sections_at_80x24():
 def test_whats_new_fix_only_panel_omits_empty_sections_and_keeps_wrapped_text():
     app = _keymap_app()
     message = "Corrected a cache-write estimate. " * 5
-    app.whats_new_notes = {"sections": [{"title": "Fixed", "items": [{"text": message}]}]}
+    app.whats_new_history = [
+        {"version": ot.__version__, "sections": [{"title": "Fixed", "items": [{"text": message}]}]}
+    ]
     original = ot.curses.color_pair
     try:
         ot.curses.color_pair = lambda n: n
@@ -124,7 +184,12 @@ def test_whats_new_fix_only_panel_omits_empty_sections_and_keeps_wrapped_text():
 def test_whats_new_uses_full_body_height_and_centers_both_border_labels():
     for height, width in ((24, 80), (48, 128)):
         app = _keymap_app()
-        app.whats_new_notes = {"sections": [{"title": "Fixed", "items": [{"text": "A fix."}]}]}
+        app.whats_new_history = [
+            {
+                "version": ot.__version__,
+                "sections": [{"title": "Fixed", "items": [{"text": "A fix."}]}],
+            }
+        ]
         screen = FakeScreen(height, width)
         frames, writes = [], []
         app.renderer.draw_frame = lambda *args, frames=frames: frames.append(args[1:])

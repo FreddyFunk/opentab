@@ -234,6 +234,8 @@ REGISTRY: tuple[Context, ...] = (
         "The W release highlights pager.",
         None,
         (
+            Action("older", ("l", "right"), "previous release"),
+            Action("newer", ("h", "left"), "next release"),
             *_SCROLL,
             Action("open_release", ("o",), "open the full GitHub release"),
             Action("close", ("esc", "q", "W"), "close the release highlights"),

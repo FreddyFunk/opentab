@@ -28,7 +28,9 @@ static host.
   and colour themes (`C`).
 - Driven by the TUI keys (`j`/`k`, `1`–`9`, `Tab`, `h`/`l`, `Esc`, `$`, `w`, `p`/`t`/`u`/`m`, `T`, `P`,
   `R`, `W`) or the mouse; every table sorts on a header click. `W` (or the visible
-  header action) opens the bundled What's New panel without checking for updates.
+  header action) opens the bundled offline release history without checking for updates.
+  Its Previous/Next buttons and `h`/`l` or arrow keys stop at the history ends;
+  the full-release link follows the entry currently shown.
 - Time, project, harness, machine and session scopes have **shareable deep links**
   (`#/m/2026-06`, `#/h/<harness>`, `#/s/<session>`, …), and the browser's back button steps out.
   In-place drills and overlay state are not encoded in the URL.
@@ -117,9 +119,9 @@ the bundled palettes (Catppuccin Mocha/Latte, Tokyo Night/Day, Gruvbox, Nord,
 Dracula, Rosé Pine, …) render identically, and the page remembers the viewer's
 choice in `localStorage`.
 
-What's New is manual in static and live reports. It does not infer that the viewer
-upgraded, stores no unread marker in the browser, and restores focus to the control
-that opened it when closed.
+What's New is manual in static and live reports. It starts at the installed release,
+does not infer that the viewer upgraded, stores no unread marker in the browser, and
+restores focus to the control that opened it when closed.
 
 ## Contributing to the browser
 

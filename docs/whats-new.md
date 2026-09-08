@@ -1,6 +1,6 @@
 # Maintaining Release Notes
 
-The in-app What's New panel reads `src/opentab/data/whats-new.json`, not this
+The in-app What's New history reads `src/opentab/data/whats-new.json`, not this
 document. Both frontends use the same bundled, offline content. User controls
 are documented in [Keys and navigation](keys.md) and [Web](web.md).
 
@@ -24,21 +24,27 @@ path helps discovery. Its `text` can accompany a `binding` with `context` and
 
 ## Releasing
 
-1. Update the resource's `version` alongside `__version__` in
-   `src/opentab/__init__.py`.
-2. Replace `sections` with the release's changes and set `release_url` to its
-   official GitHub release page. Reuse this summary when writing the full notes.
+1. Prepend a new entry to `releases` while updating `__version__` in
+   `src/opentab/__init__.py`. Preserve every older entry; the history has no fixed
+   retention limit.
+2. Set the entry's `version`, `sections`, and official GitHub `release_url`. Commit
+    the matching version and content together, and show the new in-app entry to Mo for
+   approval. Reuse the summary when writing the full notes.
 3. Run `python3 run_tests.py whats_new` and the normal checks. The resource test
-   enforces matching versions; malformed or mismatched content is unavailable
-   rather than shown as the wrong release.
-4. Inspect `W` in both frontends, including an 80x24 terminal and a mobile browser.
-   Keep notes concise enough to scan; let longer releases scroll.
+   enforces that the installed release exists, versions are unique and links match;
+   malformed or mismatched content is unavailable rather than shown for the wrong release.
+4. Inspect the new entry and history navigation with `W` in both frontends,
+   including an 80x24 terminal and a mobile browser. Keep notes concise enough to
+   scan; let longer releases scroll.
 
 ## Announcements
 
 The TUI queues a nonblocking hint after a known upgrade and the first paint,
 without displacing existing startup notices. It says "Press W to see what's new"
-(using the configured key) and stays visible for 10 seconds. It never opens the panel by itself.
+(using the configured key) and stays visible for 10 seconds. An accent frame,
+`NEW IN vX.Y.Z` label and highlighted shortcut distinguish it from ordinary
+notifications. Opening the panel dismisses that toast, not other notices; the
+announcement stays in notification history. It never opens the panel by itself.
 Missing or invalid version history quietly establishes a baseline on normal exit;
 equal versions and downgrades are silent. The last announced version is saved
 with other preferences, preserving a newer marker from another process.

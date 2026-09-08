@@ -31,8 +31,49 @@ def _resource_text() -> str:
     return files("opentab").joinpath("data").joinpath("whats-new.json").read_text("utf-8")
 
 
-def load_release_notes(installed_version: str | None = None) -> dict | None:
-    """Load only a complete resource for the requested installed stable release."""
+def _valid_release(release) -> bool:
+    if not isinstance(release, dict) or stable_version(release.get("version")) is None:
+        return False
+    if release.get("release_url") != RELEASES_URL + "/tag/v" + release["version"]:
+        return False
+    sections = release.get("sections")
+    if not isinstance(sections, list) or not sections:
+        return False
+    seen = set()
+    for section in sections:
+        if not isinstance(section, dict):
+            return False
+        title = section.get("title")
+        if title not in ("New", "Improved", "Fixed") or title in seen:
+            return False
+        seen.add(title)
+        items = section.get("items")
+        if not isinstance(items, list) or not items:
+            return False
+        for item in items:
+            if not isinstance(item, dict):
+                return False
+            if not isinstance(item.get("text"), str) or not item["text"].strip():
+                return False
+            if item.get("availability", "both") not in ("both", "tui", "web"):
+                return False
+            hint = item.get("hint")
+            if hint is None:
+                continue
+            if not isinstance(hint, dict) or not isinstance(hint.get("text"), str):
+                return False
+            binding = hint.get("binding")
+            if binding is not None and (
+                not isinstance(binding, dict)
+                or not isinstance(binding.get("context"), str)
+                or not isinstance(binding.get("action"), str)
+            ):
+                return False
+    return True
+
+
+def load_release_history(installed_version: str | None = None) -> list[dict] | None:
+    """Load validated releases through the installed stable version, newest first."""
     if installed_version is None:
         from opentab import __version__
 
@@ -41,48 +82,37 @@ def load_release_notes(installed_version: str | None = None) -> dict | None:
         data = json.loads(_resource_text())
     except Exception:  # noqa: BLE001 -- a missing/broken package resource is non-fatal
         return None
-    if not isinstance(data, dict) or stable_version(installed_version) is None:
+    installed = stable_version(installed_version)
+    if not isinstance(data, dict) or installed is None:
         return None
-    if data.get("version") != installed_version:
+    releases = data.get("releases")
+    if not isinstance(releases, list) or not releases:
         return None
-    if not isinstance(data.get("release_url"), str):
-        return None
-    if not data["release_url"].startswith("https://github.com/hamidi-dev/opentab/releases/"):
-        return None
-    sections = data.get("sections")
-    if not isinstance(sections, list) or not sections:
-        return None
-    seen = set()
-    for section in sections:
-        if not isinstance(section, dict):
+    versions = []
+    seen_versions = set()
+    for release in releases:
+        if not _valid_release(release):
             return None
-        title = section.get("title")
-        if title not in ("New", "Improved", "Fixed") or title in seen:
+        version = stable_version(release["version"])
+        if version is None:
             return None
-        seen.add(title)
-        items = section.get("items")
-        if not isinstance(items, list) or not items:
+        if version in seen_versions:
             return None
-        for item in items:
-            if not isinstance(item, dict):
-                return None
-            if not isinstance(item.get("text"), str) or not item["text"].strip():
-                return None
-            if item.get("availability", "both") not in ("both", "tui", "web"):
-                return None
-            hint = item.get("hint")
-            if hint is None:
-                continue
-            if not isinstance(hint, dict) or not isinstance(hint.get("text"), str):
-                return None
-            binding = hint.get("binding")
-            if binding is not None and (
-                not isinstance(binding, dict)
-                or not isinstance(binding.get("context"), str)
-                or not isinstance(binding.get("action"), str)
-            ):
-                return None
-    return data
+        versions.append(version)
+        seen_versions.add(version)
+    if installed not in versions:
+        return None
+    return [
+        release
+        for version, release in sorted(zip(versions, releases), reverse=True)
+        if version <= installed
+    ]
+
+
+def load_release_notes(installed_version: str | None = None) -> dict | None:
+    """Load the bundled note matching the requested installed stable release."""
+    history = load_release_history(installed_version)
+    return history[0] if history else None
 
 
 def should_announce(stored_version, installed_version: str, notes: dict | None) -> bool:
@@ -107,9 +137,9 @@ def marker_to_save(disk_value, installed_version: str) -> str:
 
 
 def public_payload(installed_version: str) -> dict:
-    notes = load_release_notes(installed_version)
-    if notes is not None:
-        return notes
+    releases = load_release_history(installed_version)
+    if releases is not None:
+        return {"version": installed_version, "releases": releases}
     return {
         "version": installed_version,
         "unavailable": True,

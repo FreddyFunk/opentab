@@ -155,6 +155,7 @@ def test_release_hint_lasts_ten_seconds_without_changing_other_toast_durations()
     app._toast_clock = lambda: now[0]
     app._announce_whats_new()
     assert app.toasts[-1].text == "Press W to see what's new"
+    assert app.toasts[-1].kind == "release"
     assert app.toasts[-1].ttl == 10.0
     app._mark_toasts_shown()
     now[0] = 109.9
@@ -163,6 +164,36 @@ def test_release_hint_lasts_ten_seconds_without_changing_other_toast_durations()
     assert app.active_toasts() == []
     app.notify("Ordinary notification")
     assert app.toasts[-1].ttl == app.TOAST_TTL == 4.0
+
+
+def test_opening_release_notes_clears_only_the_release_toast_and_keeps_its_history():
+    app = app_with([])
+    app.notify("Keep this warning", "warn")
+    app._mark_toasts_shown()
+    app._announce_whats_new()
+    app.open_whats_new()
+    assert [toast.text for toast in app.toasts] == ["Keep this warning"]
+    assert app.toast_log[-1].kind == "release"
+
+
+def test_release_toast_uses_an_accent_frame_and_highlights_the_shortcut():
+    app = app_with([])
+    app._announce_whats_new()
+    app.whats_new_index = 1  # Toast labels the installed release, not an older viewed one.
+    screen = AttrScreen(24, 80)
+    original = ot.curses.color_pair
+    try:
+        ot.curses.color_pair = lambda n: n << 8
+        app.renderer.draw_toasts(screen, 24, 80)
+    finally:
+        ot.curses.color_pair = original
+    text = screen_text(screen)
+    assert f"NEW IN v{ot.__version__}" in text
+    assert "Press W to see what's new" in text
+    assert screen.cells[(5, 41)] == "W"
+    assert screen.attrs[(5, 41)] == (6 << 8) | ot.curses.A_BOLD | ot.curses.A_REVERSE
+    assert screen.attrs[(5, 35)] == 0  # Body stays readable, not a solid accent block.
+    assert app.renderer.TOAST_STYLE["info"][0] == 4
 
 
 def test_release_hint_waits_for_first_paint_and_does_not_replace_an_existing_toast():

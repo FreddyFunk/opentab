@@ -113,7 +113,8 @@ def test_web_payload_carries_both_cost_snapshots():
     assert w1["date"].startswith("2026-05-01")
     assert payload["nodes"] == {}  # no subagents -> no per-session tree queries
     assert payload["whatsNew"]["version"] == ot.__version__
-    assert payload["whatsNew"]["sections"]
+    assert payload["whatsNew"]["releases"][0]["version"] == ot.__version__
+    assert len(payload["whatsNew"]["releases"]) >= 5
 
 
 def test_web_whats_new_is_manual_theme_aware_and_never_persists_a_marker():
@@ -121,6 +122,10 @@ def test_web_whats_new_is_manual_theme_aware_and_never_persists_a_marker():
     assert 'id="whats-new"' in page and 'aria-labelledby="wn-title"' in page
     assert "function openWhatsNew(invoker)" in page
     assert "WHATS_NEW_RETURN.focus()" in page
+    assert "function stepWhatsNew(step, focusAction)" in page
+    assert "button:not([disabled])" in page
+    assert page.count("whatsNewNav()") >= 2  # navigation stays visible above and below the notes
+    assert "release ? release.release_url" in page
     assert "item.availability.toUpperCase()" in page
     assert "h('span', null, item.text)" in page  # structured text, never innerHTML
     assert "h('h3', null, section.title)" in page
@@ -641,6 +646,8 @@ let META={demo:false}, BROWSE='time', FOCUS='', TAB='', MODE='real', MSUB=null, 
 let opened=0, closed=0;
 function openWhatsNew(){opened++;WHATS_NEW_OPEN=true}
 function closeWhatsNew(){closed++;WHATS_NEW_OPEN=false}
+let historySteps=[];
+function stepWhatsNew(step, focusAction){historySteps.push([step,focusAction])}
 function closeTheme(){} function closeWhatif(){} function closePrices(){} function closeTrends(){}
 function closeRange(){} function closeStartupWarning(){} function whatifShown(){return []}
 function stepWhatif(){} function whatifFlip(){} function armWhatif(){} function openTheme(){}
@@ -663,7 +670,10 @@ WHATS_NEW_OPEN=true; document.activeElement=close; result.tab=event('Tab');
 result.tabFocus=document.activeElement.name;
 result.shiftTab=event('Tab',link,true); result.shiftTabFocus=document.activeElement.name;
 result.nativeEnter=event('Enter',link);
+result.nativeSpace=event(' ',link);
 result.swallowed=event('x',close);
+event('l',close); event('ArrowRight',close);
+event('h',close); event('ArrowLeft',close);
 WHATS_NEW_OPEN=false; THEMEPICK=true; result.themeW=event('W'); THEMEPICK=false;
 RANGE.pick=true; result.rangeW=event('W'); RANGE.pick=false;
 WHATIF.open=true; result.whatifW=event('W'); WHATIF.open=false;
@@ -672,7 +682,8 @@ result.editableW=event('W',editable);
 BROWSE='harnesses'; FOCUS='months'; result.digit=event('1'); result.digitFocus=FOCUS;
 console.log(JSON.stringify({opened, tab:result.tab.prevented, tabFocus:result.tabFocus,
   shiftTab:result.shiftTab.prevented, shiftTabFocus:result.shiftTabFocus,
-  nativeEnter:result.nativeEnter.prevented, swallowed:result.swallowed.prevented,
+  nativeEnter:result.nativeEnter.prevented, nativeSpace:result.nativeSpace.prevented,
+  swallowed:result.swallowed.prevented, historySteps,
   themeW:result.themeW.prevented, rangeW:result.rangeW.prevented,
   whatifW:result.whatifW.prevented, editableW:result.editableW.prevented,
   digit:result.digit.prevented, digitFocus:result.digitFocus}));
@@ -688,7 +699,9 @@ console.log(JSON.stringify({opened, tab:result.tab.prevented, tabFocus:result.ta
         "shiftTab": True,
         "shiftTabFocus": "close",
         "nativeEnter": False,
+        "nativeSpace": False,
         "swallowed": True,
+        "historySteps": [[1, "older"], [1, "older"], [-1, "newer"], [-1, "newer"]],
         "themeW": True,
         "rangeW": True,
         "whatifW": True,
@@ -696,6 +709,28 @@ console.log(JSON.stringify({opened, tab:result.tab.prevented, tabFocus:result.ta
         "digit": True,
         "digitFocus": "harnesses",
     }
+
+
+def test_whats_new_javascript_history_stops_at_bounds_and_requests_focus():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript behavior check: Node.js is not installed (required in CI)")
+        return
+    source = _js_source()
+    start = source.index("function stepWhatsNew(step, focusAction) {")
+    end = source.index("\nfunction whatsNewNav()", start)
+    function = source[start:end]
+    harness = (
+        "const WHATS_NEW={releases:[{version:'3'},{version:'2'},{version:'1'}]};"
+        "let WHATS_NEW_INDEX=0,calls=[];function renderWhatsNew(f){calls.push(f);}\n"
+        + function
+        + "\nstepWhatsNew(-1,'newer');stepWhatsNew(1,'older');stepWhatsNew(9,'older');"
+        "stepWhatsNew(1,'older');stepWhatsNew(-1,'newer');"
+        "console.log(JSON.stringify({index:WHATS_NEW_INDEX,calls}));"
+    )
+    result = subprocess.run([node, "-e", harness], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"index": 1, "calls": ["older", "older", "newer"]}
 
 
 def _js_whatif_cost(tok, rates):

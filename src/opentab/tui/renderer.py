@@ -5441,7 +5441,8 @@ class Renderer:
             self.write(stdscr, row, box_x, " " * box_w)
         close = self._key("whats-new", "close")
         release = self._key("whats-new", "open_release")
-        title = f"What's New · v{self.app.whats_new_version}"
+        viewed_version = (self.app.whats_new_notes or {}).get("version", self.app.whats_new_version)
+        title = f"What's New · v{viewed_version}"
         border = curses.color_pair(6) | curses.A_BOLD
         self.draw_frame(stdscr, box_y, box_x, box_h, box_w, border)
         label = f" {shorten(title, box_w - 6)} "
@@ -5455,7 +5456,19 @@ class Renderer:
                 self.write(stdscr, row_y, box_x + 3 + dx, text, attr)
         self._paint_scrollbar(stdscr, box_y + 1, box_x + box_w - 1, len(lines), visible, scroll)
         scroll_keys = self._keys("whats-new", "down", "up")
+        older = self._key("whats-new", "older")
+        newer = self._key("whats-new", "newer")
+        position = (
+            f"{self.app.whats_new_index + 1}/{len(self.app.whats_new_history)}"
+            if self.app.whats_new_history
+            else ""
+        )
         hints = [
+            f"{newer} newer" if newer and self.app.whats_new_index > 0 else "",
+            position,
+            f"{older} older"
+            if older and self.app.whats_new_index + 1 < len(self.app.whats_new_history)
+            else "",
             f"{close} close" if close else "",
             f"{release} full release" if release else "",
             f"{scroll_keys} scroll" if len(lines) > visible and scroll_keys else "",
@@ -5869,6 +5882,7 @@ class Renderer:
         "success": (3, "✓", "Done"),
         "warn": (2, "▲", "Heads up"),
         "error": (5, "✕", "Error"),
+        "release": (6, "✦", "What's new"),
     }
     TOAST_WIDTH = 46  # card width the message wraps within
     TOAST_MAX_LINES = 4  # cap wrapped message lines so a card can't fill the screen
@@ -5888,16 +5902,42 @@ class Renderer:
         for toast in reversed(toasts):
             pair, sigil, label = self.TOAST_STYLE.get(toast.kind, self.TOAST_STYLE["info"])
             head = f" {sigil} {label}"
-            wrapped = textwrap.wrap(toast.text, maxw - 1) or [""]
+            is_release = toast.kind == "release"
+            text_width = maxw - (6 if is_release else 1)
+            wrapped = (
+                wrap_cells(toast.text, text_width)
+                if is_release
+                else textwrap.wrap(toast.text, text_width)
+            )
+            wrapped = wrapped or [""]
             if len(wrapped) > self.TOAST_MAX_LINES:  # mark the overflow rather than hide it
                 wrapped = wrapped[: self.TOAST_MAX_LINES]
-                wrapped[-1] = shorten(wrapped[-1], maxw - 2) + "…"
+                wrapped[-1] = shorten(wrapped[-1], text_width - 1) + "…"
+            fading = toast.remaining(now) < self.TOAST_FADE
+            if is_release:
+                card_h = len(wrapped) + 4
+                if row + card_h > height - 2:
+                    break
+                x = max(0, width - maxw - 2)
+                accent = curses.color_pair(pair) | (curses.A_DIM if fading else curses.A_BOLD)
+                for dy in range(card_h):
+                    self.write(stdscr, row + dy, x, " " * maxw)
+                self.draw_frame(stdscr, row, x, card_h, maxw, accent)
+                sigil = sigil if unicode_screen() else "*"
+                title = f" {sigil} NEW IN v{self.app.whats_new_version} "
+                self.write(stdscr, row, x + 2, clip(title, maxw - 4), accent | curses.A_REVERSE)
+                key = self._key("main", "whats_new") or self._key("help", "whats_new")
+                for dy, line in enumerate(wrapped):
+                    self.write(stdscr, row + 2 + dy, x + 3, line, curses.A_DIM if fading else 0)
+                    if key and line.startswith(f"Press {key}"):
+                        self.write(stdscr, row + 2 + dy, x + 9, key, accent | curses.A_REVERSE)
+                row += card_h + 1
+                continue
             body = [f" {line}" for line in wrapped]
             if row + len(body) >= height - 2:  # the whole card must clear the footer hline
                 break
             cardw = min(max([len(head)] + [display_width(line) for line in body]) + 1, maxw)
             x = max(0, width - cardw - 2)
-            fading = toast.remaining(now) < self.TOAST_FADE
             base = curses.color_pair(pair) | curses.A_REVERSE
             self.write(
                 stdscr,

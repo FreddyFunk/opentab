@@ -155,7 +155,7 @@ worked 2h 15m (until 14:15)`. The Context tab still has the richer wall-clock st
 |-----|--------|
 | `T` | Trends — Daily · Weekly · Monthly · Calendar · Models · Providers · Projects · Harnesses. `h`/`l` tabs · `j`/`k` page months/weeks/years. On the charts and Calendar: `Enter` focuses, arrows pick a bar/day, `Enter` drills in, `Esc` back. On rankings: `j`/`k` pick · `s` sort · `Enter` drill. Models opens Economics / Sessions; other rows open Sessions directly |
 | `P` | Model prices — the table behind the `$` estimate; see [Pricing](pricing.md) for the views, sorting, and pinning |
-| `W` | What's New — additions, improvements and notable fixes bundled with this release. `j`/`k`, arrows, paging and `g`/`G` scroll; `o` opens the full GitHub release; `Esc`, `q`, or `W` closes. Opening it from Help returns to Help |
+| `W` | What's New — offline highlights for this and earlier bundled releases. `h`/← goes newer; `l`/→ goes older, without wrapping. `j`/`k`, ↑/↓, paging and `g`/`G` scroll. `o` opens the full GitHub release currently shown; `Esc`, `q`, or `W` closes. Reopening starts at the installed release; opening from Help returns to Help |
 | `$` | Toggle what-if prices — what unpriced usage would cost at API list rates |
 | `w` | Compare the current session at one model's list rates. Pick from used models or the catalog (`Tab` switches tiers, `f` filters, `Enter` selects, `Esc` cancels). Overview and Subagents show the comparison; other totals stay unchanged. Press `w` again to clear. See [Comparing models](pricing.md#comparing-models-with-w) for the arithmetic and limitations |
 | `H` | Harness picker (`j`/`k` move · `Enter` switch · `Esc` cancel) |

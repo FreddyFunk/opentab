@@ -88,7 +88,7 @@ from opentab.util import (
     resolve_project_root,
     workflow_fuzzy_score,
 )
-from opentab.whats_new import RELEASES_URL, load_release_notes, should_announce
+from opentab.whats_new import RELEASES_URL, load_release_history, should_announce
 
 
 class Toast:
@@ -434,7 +434,8 @@ class App:
         self.toast_history_scroll = 0
         self.whats_new = False
         self.whats_new_scroll = 0
-        self.whats_new_notes = load_release_notes()
+        self.whats_new_history = load_release_history() or []
+        self.whats_new_index = 0
         self.whats_new_version = __version__
         self.whats_new_marker_to_save: str | None = None
         self.last_announced_version: str | None = None
@@ -5587,8 +5588,10 @@ class App:
             self._whats_new_hint_pending = False
             self.whats_new_marker_to_save = None
             return
-        qualifies = should_announce(
-            self.last_announced_version, installed_version, self.whats_new_notes
+        installed_notes = self.whats_new_history[0] if self.whats_new_history else None
+        already_acknowledged = self.whats_new_marker_to_save == installed_version
+        qualifies = not already_acknowledged and should_announce(
+            self.last_announced_version, installed_version, installed_notes
         )
         self._whats_new_hint_pending = qualifies
         self.whats_new_marker_to_save = (
@@ -5599,9 +5602,25 @@ class App:
 
     def open_whats_new(self) -> None:
         self.whats_new = True
+        self.toasts[:] = [toast for toast in self.toasts if toast.kind != "release"]
+        self.whats_new_index = 0
         self.whats_new_scroll = 0
         self._whats_new_hint_pending = False
         self.whats_new_marker_to_save = self.whats_new_version
+
+    @property
+    def whats_new_notes(self) -> dict | None:
+        if not self.whats_new_history:
+            return None
+        return self.whats_new_history[self.whats_new_index]
+
+    def step_whats_new(self, step: int) -> None:
+        if not self.whats_new_history:
+            return
+        index = max(0, min(len(self.whats_new_history) - 1, self.whats_new_index + step))
+        if index != self.whats_new_index:
+            self.whats_new_index = index
+            self.whats_new_scroll = 0
 
     def _announce_whats_new(self) -> None:
         main = self.keymap.label("main", "whats_new")
@@ -5614,7 +5633,7 @@ class App:
             text = f"Updated to v{self.whats_new_version}. See What's New in the keymap."
         self._whats_new_hint_pending = False
         self.whats_new_marker_to_save = self.whats_new_version
-        self.notify(text, ttl=10.0)
+        self.notify(text, kind="release", ttl=10.0)
 
     def edit_keymap(self, stdscr: curses.window | None) -> None:
         # `K`: suspend curses, open keymap.conf in $EDITOR, and reload the bindings
@@ -6533,6 +6552,10 @@ class App:
                 self.whats_new_scroll = 0
             elif act == "bottom":
                 self.whats_new_scroll = 10_000
+            elif act == "older":
+                self.step_whats_new(1)
+            elif act == "newer":
+                self.step_whats_new(-1)
             elif act == "open_release":
                 url = (self.whats_new_notes or {}).get("release_url", RELEASES_URL)
                 self.notify("opened full release" if open_path(url) else f"release: {url}")

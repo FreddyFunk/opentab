@@ -79,8 +79,9 @@ the history scannable and feeds the release-notes pass.
   trailing period, ≤72 chars. Body is optional; wrap ~72 and explain *why*, not *what*.
 - **Releases** use `chore(release): vX.Y.Z` (and bump `__version__` in
   `src/opentab/__init__.py`; the version is not derived from a git tag). Update the
-  bundled highlights in `src/opentab/data/whats-new.json` at the same time; the content
-  format and release workflow are documented in [`docs/whats-new.md`](docs/whats-new.md).
+  bundled highlights in `src/opentab/data/whats-new.json` in the same commit: prepend
+  the matching release and preserve the existing history. Show all in-app copy to Mo;
+  the format and workflow are documented in [`docs/whats-new.md`](docs/whats-new.md).
 - **No AI attribution:** omit generated-by messages and AI co-author trailers.
 - **Scope** is optional but preferred: exactly one, lowercase, from the vocabulary below.
   Don't coin a synonym for an existing scope (`tui` not `ui`, `pricing` not `prices`,

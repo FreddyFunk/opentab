@@ -1,41 +1,131 @@
 {
-  "version": "1.22.0",
-  "sections": [
+  "releases": [
     {
-      "title": "New",
-      "items": [
+      "version": "1.22.0",
+      "sections": [
         {
-          "text": "Compare your coding agents side by side, then explore each harness's projects, models and sessions.",
-          "hint": {
-            "text": "Open Harnesses",
-            "binding": {"context": "main", "action": "mode_harnesses"}
-          }
+          "title": "New",
+          "items": [
+            {
+              "text": "Compare your coding agents side by side, then explore each harness's projects, models and sessions.",
+              "hint": {
+                "text": "Open Harnesses",
+                "binding": {"context": "main", "action": "mode_harnesses"}
+              }
+            },
+            {
+              "text": "Read a remote turn's trace on demand over SSH, without copying whole transcripts.",
+              "availability": "tui",
+              "hint": {"text": "Managed SSH machine > session > Turns > turn"}
+            },
+            {"text": "Read this release's highlights inside OpenTab, even offline."}
+          ]
         },
         {
-          "text": "Read a remote turn's trace on demand over SSH, without copying whole transcripts.",
-          "availability": "tui",
-          "hint": {
-            "text": "Managed SSH machine > session > Turns > turn"
-          }
+          "title": "Improved",
+          "items": [
+            {"text": "See where a model's token costs come from directly in Trends.", "hint": {"text": "Trends > Models > Economics"}},
+            {"text": "Switch between Trends and Prices without losing your place.", "availability": "tui"}
+          ]
         },
         {
-          "text": "Read this release's highlights inside OpenTab, even offline."
+          "title": "Fixed",
+          "items": [
+            {"text": "Return from Trends directly to your original session list, with contextual help matching the active controls."}
+          ]
         }
-      ]
+      ],
+      "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.22.0"
     },
     {
-      "title": "Improved",
-      "items": [
-        {"text": "See where a model's token costs come from directly in Trends.", "hint": {"text": "Trends > Models > Economics"}},
-        {"text": "Switch between Trends and Prices without losing your place.", "availability": "tui"}
-      ]
+      "version": "1.21.0",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            {
+              "text": "See what your agent actually did, right inside each turn.",
+              "availability": "tui",
+              "hint": {"text": "Turns > prompt > turn", "binding": {"context": "main", "action": "select"}}
+            },
+            {"text": "Use OpenTab in your agent via MCP.", "hint": {"text": "Ask your agent: \"What did I spend on this project?\""}}
+          ]
+        },
+        {
+          "title": "Improved",
+          "items": [
+            {"text": "See which model did the work, and which one ran up the bill."},
+            {"text": "Spot expensive turns and watch your agent's context fill up."}
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            {"text": "Priority requests and OpenAI cache writes now use the right rates."},
+            {"text": "Your archived Codex sessions are back, with their titles."},
+            {"text": "Open a session from a browser model drill and return where you left off."}
+          ]
+        }
+      ],
+      "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.21.0"
     },
     {
-      "title": "Fixed",
-      "items": [
-        {"text": "Return from Trends directly to your original session list, with contextual help matching the active controls."}
-      ]
+      "version": "1.20.0",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            {"text": "Get warned before Claude Code's default retention deletes the history OpenTab reads."},
+            {"text": "Browse Gemini CLI usage, subagents, turns and tools."},
+            {"text": "Browse Google Antigravity conversations, auxiliary calls and subagents."}
+          ]
+        }
+      ],
+      "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.20.0"
+    },
+    {
+      "version": "1.19.0",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            {"text": "See Hermes tool and MCP usage, including auxiliary calls previously missing from session spend."},
+            {"text": "Rank projects in Trends, then drill directly into their sessions."},
+            {"text": "Start in the API-equivalent estimate view; press $ for recorded costs."}
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            {"text": "Warm starts re-parse only sessions touched by a changed transcript instead of the whole corpus."},
+            {"text": "Machines opens on the whole fleet, and demo mode can preserve project paths separately from titles."},
+            {"text": "Browser project rankings drill into the project they grouped, while malformed cache rows fail safely."}
+          ]
+        }
+      ],
+      "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.19.0"
+    },
+    {
+      "version": "1.18.0",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            {"text": "Track reasoning effort and the cache-reset cost when an agent changes effort."},
+            {"text": "See which subagents handled each prompt in the Turns table."},
+            {"text": "Price Codex GPT-5.6 cache writes separately from ordinary input."}
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            {"text": "Worked time no longer counts idle days between resumed turns."},
+            {"text": "OpenCode no longer invents prompt groups from subagent task messages."},
+            {"text": "Demo exits in one press, session-only what-if stays in session, and SSH pulls fail fast."}
+          ]
+        }
+      ],
+      "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.18.0"
     }
-  ],
-  "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.22.0"
+  ]
 }
