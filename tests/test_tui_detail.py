@@ -702,11 +702,14 @@ def test_detail_turns_cumulative_and_reprices_under_dollar():
         assert "$3.00 · 100%" in tj  # the last prompt's cumulative cell
         assert any(line.strip().startswith("cost│") for line in table)
         assert any(line.strip().startswith("context│") for line in table)
-        cost_strip = next(line for line in table if line.strip().startswith("cost│"))
-        context_strip = next(line for line in table if line.strip().startswith("context│"))
-        assert len(cost_strip.split("│", 1)[1].split("peak", 1)[0].rstrip()) == len(
-            context_strip.split("│", 1)[1].split("peak", 1)[0].rstrip()
+        cost_start = next(i for i, line in enumerate(table) if line.strip().startswith("cost│"))
+        context_start = next(
+            i for i, line in enumerate(table) if line.strip().startswith("context│")
         )
+        assert context_start == cost_start + 4  # three cost rows and a separator
+        assert len(table[cost_start + 2]) == len(table[context_start + 4])
+        for line, group in rnd._turn_header_at.items():
+            assert ("Add feature X", "Fix the bug")[group] in table[line]
         # A prompt row is a moment (MM-DD HH:MM); the seconds belong to its turns, which
         # live in the popup, so no per-turn clock stamp reaches the table.
         assert not any(re.search(r"\d\d-\d\d \d\d:\d\d:\d\d", ln) for ln in table)
@@ -725,6 +728,46 @@ def test_detail_turns_cumulative_and_reprices_under_dollar():
         assert "$6.00 · 100%" in pjoined and "Add feature X" in pjoined
         app.open_turn_drill(0)
         assert "$1.00" in "\n".join(rnd.detail_turn_drill(wf, 90))
+
+
+def test_turn_metric_charts_height_scaling_and_missing_context():
+    rows = [
+        {"input": 100},
+        {"depth": 1, "input": 10000},
+        {"input": 50},
+        {},
+        {"input": 10},
+    ]
+    costs = [1, 0.00001, 0.5, 0, 0.25]
+    render = ot.Renderer._turn_metric_strips
+    for width in (40, 80, 160):
+        lines = render(rows, costs, width, True)
+        assert len(lines) == 11
+        assert all(len(line) <= width for line in lines)
+        assert "peak $1.00" in lines[0] and "peak 100" in lines[4]
+        plot_width = len(lines[9]) - 10
+        bars = [line[10 : 10 + plot_width] for line in lines]
+        repeat = plot_width // len(rows)
+        assert bars[0][0] == bars[1][0] == bars[2][0] == "█"
+        assert bars[0][repeat] == bars[1][repeat] == " "
+        assert bars[2][repeat] == "▁"  # tiny, but nonzero
+        assert all(bars[row][3 * repeat] == " " for row in (0, 1, 2))
+        assert all(bars[row][0] == "█" for row in range(4, 9))
+        assert all(bars[row][repeat] == " " for row in range(4, 9))
+        assert bars[6][2 * repeat] == "▄"  # half of the five-row context height
+        assert bars[8][4 * repeat] == "▄"  # context shrinks to 10% of its peak
+        assert lines[-1].strip().startswith("turn 1") and lines[-1].endswith("5")
+    assert len(render(rows, costs, 80, False)) == 5
+    assert len(render([{}], [0], 80, True)) == 5
+    assert render([], [], 80, True) == []
+
+    # More turns than columns retain maxima, not summed cost or subagent context.
+    rows = [{"input": 100}, {"depth": 1, "input": 10000}] * 50
+    lines = render(rows, [0.5, 1] * 50, 40, True)
+    plot_width = len(lines[9]) - 10
+    assert lines[0][10 : 10 + plot_width] == "█" * plot_width
+    assert lines[4][10 : 10 + plot_width] == "█" * plot_width
+    assert "peak $1.00" in lines[0] and "peak 100" in lines[4]
 
 
 def test_turns_marks_compactions_even_while_folded():

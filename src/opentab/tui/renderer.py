@@ -5043,18 +5043,18 @@ class Renderer:
 
     @staticmethod
     def _turn_metric_strips(rows, costs, width: int, context_curve: bool) -> list[str]:
-        """Two sparklines sharing turn-index buckets but keeping separate scales."""
+        """Multi-row bars sharing turn-index buckets but keeping separate scales."""
         n = len(rows)
         if not n:
             return []
         contexts = [None if r.get("depth") else context_size(r) or None for r in rows]
-        metrics = [("cost", list(costs), f"peak {money(max(costs, default=0.0))}")]
+        metrics = [("cost", list(costs), f"peak {money(max(costs, default=0.0))}", 3)]
         if context_curve and any(v is not None for v in contexts):
             peak_context = max(v for v in contexts if v is not None)
-            metrics.append(("context", contexts, f"peak {human_tokens(peak_context)}"))
+            metrics.append(("context", contexts, f"peak {human_tokens(peak_context)}", 5))
 
         gutter = 9
-        tail_w = max(len(tail) for _label, _values, tail in metrics)
+        tail_w = max(len(tail) for _label, _values, tail, _height in metrics)
         plot_w = max(8, width - gutter - tail_w - 3)
         repeat = max(1, min(4, plot_w // n))
         cols = min(plot_w, n * repeat)
@@ -5069,14 +5069,26 @@ class Renderer:
             return out
 
         lines = []
-        for label, values, tail in metrics:
+        for label, values, tail, height in metrics:
+            if lines:
+                lines.append(" " * gutter + "│")
             values = buckets(values)
             peak = max((v for v in values if v is not None), default=0.0)
-            cells = []
-            for value in values:
-                level = round(value / peak * 8) if value is not None and peak > 0 else 0
-                cells.append("█" if level >= 8 else BLOCKS_UP[max(0, min(7, level))])
-            lines.append(f"{label:>{gutter}}│{''.join(cells)}  {tail:>{tail_w}}")
+            # Keep a visible tick for cheap calls without giving zero/missing values a bar.
+            levels = [
+                max(1, round(value / peak * height * 8))
+                if value is not None and value > 0 and peak > 0
+                else 0
+                for value in values
+            ]
+            for row in range(height):
+                cells = []
+                for level in levels:
+                    fill = max(0, min(8, level - (height - row - 1) * 8))
+                    cells.append("█" if fill == 8 else BLOCKS_UP[fill])
+                name = label if row == 0 else ""
+                suffix = f"  {tail:>{tail_w}}" if row == 0 else ""
+                lines.append(f"{name:>{gutter}}│{''.join(cells)}{suffix}")
         lines.append(" " * gutter + "└" + "─" * cols)
         left, right = "turn 1", str(n)
         if len(left) + len(right) + 1 > cols:

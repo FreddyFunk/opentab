@@ -296,6 +296,11 @@ on available row data; content flags advertise only an openable trace and never
 trigger a content fetch just to draw a marker. Tools attribution means usage in
 steps that invoked a tool, not the size of the tool's output.
 
+Above the table, cost uses three chart rows and main-thread context uses five.
+Both share turn-index buckets (max per bucket, not elapsed time) and scale to
+their own labeled peaks. Nonzero values retain at least a one-eighth-cell tick;
+missing context and subagent-only buckets stay blank.
+
 Subagents reuses the prefetched node snapshot for its delegation overview,
 execution table, agent/model summaries and selected execution's token breakdown.
 Selection uses the node's index within that snapshot, not its label or sorted
