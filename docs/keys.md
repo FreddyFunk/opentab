@@ -23,7 +23,7 @@ Detail tabs per scope: years/months get Overview · Models · Projects · Sessio
 days drop Models. Drilling a row of the **Models** tab replaces them with that model's
 own two: **Economics** (what it cost here, split by token type) and **Sessions** (the
 sessions that used it, with the cost and tokens *it* accounts for) — see
-[Scope & filter](#scope--filter). A session adds **Turns** (per-turn cost over time, every harness
+[Scope & filter](#scope--filter). A session adds **Turns** (prompt costs and per-turn drill-down, every harness
 that records per-step usage), **Tools** (per-tool / MCP spend) and **Context** (the
 context window's growth curve, % of the model's window, compaction markers, and —
 on harnesses whose logs carry content — an estimated breakdown of what filled it)
@@ -78,6 +78,11 @@ output; a second `z` returns to the capped preview.
 Expansion is temporary and is released when you leave the turn. Recorded tool
 errors are labeled explicitly. Sources that do not support content have no turn
 detail; real content is also unavailable in demo mode.
+
+The overview chart shows **total cost per prompt**, matching the prompt table.
+Inside a prompt, the charts show **cost per turn and context growth** for that
+prompt only, with the same session-wide turn numbers as its table. Each peak is
+local to the displayed chart; the Context tab shows the full-session curve.
 
 For [managed SSH remotes](machines.md#read-a-remote-turn), opening a turn explicitly
 fetches that turn and shows the remote machine and loading state. `Esc` closes the

@@ -1712,10 +1712,12 @@ function turnGroupRows(turns) {
   return groups;
 }
 
-function turnCostContextStrip(turns) {
+function turnCostContextStrip(turns, { prompts = false, indices = null } = {}) {
   if (!turns.length) return null;
-  const costs = turns.map(mCost);
-  const contexts = turns.map(t => t.ctx || 0);
+  const costs = turns.map(t => prompts ? t.cost : mCost(t));
+  const contexts = turns.map(t => prompts ? 0 : (t.ctx || 0));
+  const unit = prompts ? 'prompt' : 'turn';
+  const label = i => unit + ' ' + ((indices ? indices[i] : i) + 1);
   const costPeak = Math.max(...costs, 0);
   const ctxPeak = Math.max(...contexts, 0);
   const hasContext = ctxPeak > 0;
@@ -1725,12 +1727,12 @@ function turnCostContextStrip(turns) {
   const pointLabel = (t, i) => {
     const context = contexts[i] ? hTok(contexts[i]) + ' context'
       : (t.depth ? 'subagent context' : 'no context recorded');
-    return 'turn ' + (i + 1) + '\n' + money(costs[i])
+    return label(i) + '\n' + money(costs[i])
       + (hasContext ? ' · ' + context : '');
   };
   const svg = s('svg', { viewBox: '0 0 ' + VW + ' ' + VH, role: 'img' });
-  svg.appendChild(s('title', { text: 'Cost and context by turn' }));
-  svg.appendChild(s('desc', { text: turns.length + ' turns; peak cost ' + money(costPeak)
+  svg.appendChild(s('title', { text: (hasContext ? 'Cost and context' : 'Cost') + ' by ' + unit }));
+  svg.appendChild(s('desc', { text: turns.length + ' ' + unit + 's; peak ' + unit + ' cost ' + money(costPeak)
     + (hasContext ? '; peak context ' + hTok(ctxPeak) + ' tokens' : '') + '. '
     + turns.map(pointLabel).join('; ') }));
   const step = plotW / turns.length, bw = Math.max(.7, step * .76);
@@ -1746,7 +1748,7 @@ function turnCostContextStrip(turns) {
       svg.appendChild(s('line', { x1: left, y1: y, x2: VW - right, y2: y,
         stroke: thc('line'), 'stroke-width': 1 }));
       svg.appendChild(s('text', { x: VW - right, y: y - rowH + 9, 'text-anchor': 'end',
-        'font-size': 9.5, fill: thc('mut'), text: 'peak ' + fmt(peak) }));
+        'font-size': 9.5, fill: thc('mut'), text: 'peak ' + (row ? 'context' : unit) + ' ' + fmt(peak) }));
       turns.forEach((t, i) => {
         const value = row ? contexts[i] : costs[i];
         const height = peak > 0 && value > 0 ? Math.max(1, rowH * value / peak) : 0;
@@ -1760,9 +1762,9 @@ function turnCostContextStrip(turns) {
     svg.appendChild(g);
   });
   const axisY = VH - 3;
-  svg.appendChild(s('text', { x: left, y: axisY, 'font-size': 9.5, fill: thc('mut'), text: 'turn 1' }));
+  svg.appendChild(s('text', { x: left, y: axisY, 'font-size': 9.5, fill: thc('mut'), text: label(0) }));
   svg.appendChild(s('text', { x: VW - right, y: axisY, 'text-anchor': 'end', 'font-size': 9.5,
-    fill: thc('mut'), text: 'turn ' + turns.length }));
+    fill: thc('mut'), text: label(turns.length - 1) }));
   return h('div', { class: 'turn-strip' }, svg);
 }
 
@@ -1817,7 +1819,7 @@ function turnsTable(turns, expiries) {
       h('td', { class: 'r dim' }, money(cum))));
   });
   return h('div', null,
-    turnCostContextStrip(turns),
+    turnCostContextStrip(groups, { prompts: true }),
     h('div', { class: 'hint' }, groups.length + ' prompts · Cached is context reused at prompt start; low means it paid again'
       + (comps.size ? ' · ▼ ' + comps.size + ' compaction' + (comps.size > 1 ? 's' : '') + ', ~' + hTok(freed) + ' of context freed' : '')
       + (exp.size ? ' · ❄ ' + exp.size + ' cache expir' + (exp.size > 1 ? 'ies' : 'y') + ', ' + money(burnt) + ' spent re-buying context' : '')
@@ -1862,6 +1864,7 @@ function turnDrillPane(turns, groups, n) {
       + (g.turns === 1 ? '' : 's') + ' · ' + hTok(g.tokens) + ' · ' + money(g.cost)
       + ' · cached ' + pct(g.cached)),
     h('div', { class: 'prompt-full' }, g.full || '(no preceding prompt)'),
+    turnCostContextStrip(g.rows, { indices: g.indices }),
     h('div', { class: 'scroll' }, h('table', null,
       h('thead', null, h('tr', null, h('th', { class: 'r' }, '#'), h('th', null, 'Time'),
         h('th', null, 'Model'),

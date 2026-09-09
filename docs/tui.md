@@ -296,10 +296,14 @@ on available row data; content flags advertise only an openable trace and never
 trigger a content fetch just to draw a marker. Tools attribution means usage in
 steps that invoked a tool, not the size of the tool's output.
 
-Above the table, cost uses three chart rows and main-thread context uses five.
-Both share turn-index buckets (max per bucket, not elapsed time) and scale to
-their own labeled peaks. Nonzero values retain at least a one-eighth-cell tick;
-missing context and subagent-only buckets stay blank.
+Above the prompt table, a three-row chart shows total cost per consecutive prompt
+run, matching the table's costs and prompt numbers. Inside a prompt, cost uses
+three chart rows and main-thread context uses five, scoped to that prompt's turns
+and retaining the table's session-wide turn numbers. The paired charts share
+turn-index buckets (max per bucket, not elapsed time) and scale to their own
+labeled peaks. Nonzero values retain at least a one-eighth-cell tick; missing
+context and subagent-only buckets stay blank. The Context tab retains the full
+session curve.
 
 Subagents reuses the prefetched node snapshot for its delegation overview,
 execution table, agent/model summaries and selected execution's token breakdown.

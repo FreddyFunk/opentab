@@ -137,6 +137,13 @@ available, an estimated composition of what filled the window. Tabs appear only
 when that session supplies the relevant data; a live server cannot invent detail
 that a harness or an older fleet export did not retain.
 
+The **Turns** overview charts total cost per prompt, using the same consecutive
+prompt groups as the table, without a context curve. Opening a prompt shows
+per-call cost and context charts for just that prompt, with independent scales
+and the same session-global turn numbers as its drill table. If context is not
+recorded, only cost is shown. `$` updates costs at both levels; compaction and
+cache markers in the overview and the full-session **Context** tab are unchanged.
+
 The page's refresh button re-reads local data; it does not automatically re-pull
 remote machines. A pulled machine's own refresh button requests a new summary.
 See [fleet refresh](machines.md#refresh-and-offline-history) for the distinction.

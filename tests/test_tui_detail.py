@@ -701,13 +701,9 @@ def test_detail_turns_cumulative_and_reprices_under_dollar():
         assert "Turns" in cells[0] and "Cached" in cells[0] and "Cumulative" in cells[0]
         assert "$3.00 · 100%" in tj  # the last prompt's cumulative cell
         assert any(line.strip().startswith("cost│") for line in table)
-        assert any(line.strip().startswith("context│") for line in table)
-        cost_start = next(i for i, line in enumerate(table) if line.strip().startswith("cost│"))
-        context_start = next(
-            i for i, line in enumerate(table) if line.strip().startswith("context│")
-        )
-        assert context_start == cost_start + 4  # three cost rows and a separator
-        assert len(table[cost_start + 2]) == len(table[context_start + 4])
+        assert not any(line.strip().startswith("context│") for line in table)
+        assert "peak prompt $3.00" in tj
+        assert "prompt 1" in table[4] and table[4].endswith("2")
         for line, group in rnd._turn_header_at.items():
             assert ("Add feature X", "Fix the bug")[group] in table[line]
         # A prompt row is a moment (MM-DD HH:MM); the seconds belong to its turns, which
@@ -718,6 +714,8 @@ def test_detail_turns_cumulative_and_reprices_under_dollar():
         app.open_turn_drill(0)
         drilled = rnd.detail_turn_drill(wf, 90)
         assert any(re.search(r"\d\d-\d\d \d\d:\d\d:\d\d", ln) for ln in drilled)
+        assert "peak turn $0.00" in "\n".join(drilled)
+        assert any(line.strip().startswith("context│") for line in drilled)
         app.close_turn_drill()  # step back out: detail_turns is the table again
         # Under "$" the two $0 haiku turns estimate at list price (1M+2M @ $1/M),
         # so the total grows to $1 + $2 + $3 = $6.00 -- in the table and the drill alike.
@@ -725,9 +723,11 @@ def test_detail_turns_cumulative_and_reprices_under_dollar():
         priced = rnd.detail_turns(wf, 96)
         assert box_title(priced).startswith("Turns — 2 prompts · 3 turns · $6.00")
         pjoined = "\n".join(priced)
+        assert "peak prompt $3.00" in pjoined
         assert "$6.00 · 100%" in pjoined and "Add feature X" in pjoined
         app.open_turn_drill(0)
-        assert "$1.00" in "\n".join(rnd.detail_turn_drill(wf, 90))
+        drill_text = "\n".join(rnd.detail_turn_drill(wf, 90))
+        assert "$1.00" in drill_text and "peak turn $2.00" in drill_text
 
 
 def test_turn_metric_charts_height_scaling_and_missing_context():
@@ -744,7 +744,7 @@ def test_turn_metric_charts_height_scaling_and_missing_context():
         lines = render(rows, costs, width, True)
         assert len(lines) == 11
         assert all(len(line) <= width for line in lines)
-        assert "peak $1.00" in lines[0] and "peak 100" in lines[4]
+        assert "peak turn $1.00" in lines[0] and "peak 100" in lines[4]
         plot_width = len(lines[9]) - 10
         bars = [line[10 : 10 + plot_width] for line in lines]
         repeat = plot_width // len(rows)
@@ -767,7 +767,7 @@ def test_turn_metric_charts_height_scaling_and_missing_context():
     plot_width = len(lines[9]) - 10
     assert lines[0][10 : 10 + plot_width] == "█" * plot_width
     assert lines[4][10 : 10 + plot_width] == "█" * plot_width
-    assert "peak $1.00" in lines[0] and "peak 100" in lines[4]
+    assert "peak turn $1.00" in lines[0] and "peak 100" in lines[4]
 
 
 def test_turns_marks_compactions_even_while_folded():
@@ -1944,6 +1944,31 @@ def _turns_app(store_cls=_TurnNavStore):
     return app
 
 
+def test_turn_charts_match_prompt_totals_and_drill_scope():
+    app = _turns_app()
+    wf = app.current_session()
+    rnd = app.renderer
+    rows = app.session_turn_rows(wf.id)
+    # A repeated prompt ID is still a separate run, not merged into the first prompt.
+    rows[4]["prompt_id"] = rows[5]["prompt_id"] = "p1"
+    rows[0]["input"] = 900000
+    rows[2]["cost"], rows[3]["cost"] = 4, 3
+    rows[3]["depth"], rows[3]["input"] = 1, 500000
+    table = rnd.detail_turns(wf, 100)
+    assert "peak prompt $7.00" in table[0]
+    assert table[4].strip().startswith("prompt 1") and table[4].endswith("3")
+    assert "context│" not in "\n".join(table)
+    app.open_turn_drill(1)
+    drilled = rnd.detail_turns(wf, 100)
+    text = "\n".join(drilled)
+    assert "peak turn $4.00" in text and "peak 1.0k" in text
+    assert "peak 900" not in text and "peak 500" not in text
+    axis = next(line for line in drilled if line.strip().startswith("turn 3"))
+    assert axis.endswith("4")
+    app.close_turn_drill()
+    assert rnd.detail_turns(wf, 100) == table
+
+
 def test_turns_scroll_reuses_layout_and_runs_but_restores_paint_metadata():
     class CountedRows(list):
         scans = 0
@@ -2003,10 +2028,13 @@ def test_turns_layout_rebuilds_for_width_prices_snapshot_and_capabilities():
     updated = rnd.detail_turns(wf, 76)
     assert "replacement prompt" in "\n".join(updated)
     assert app.turn_runs(wf.id) is not runs and len(app.turn_runs(wf.id)) == 4
+    app.open_turn_drill(0)
+    drilled = rnd.detail_turns(wf, 76)
     with patch.object(app, "session_supports_context_curve", return_value=False):
         no_curve = rnd.detail_turns(wf, 76)
-        assert any("context│" in line for line in updated)
+        assert any("context│" in line for line in drilled)
         assert not any("context│" in line for line in no_curve)
+    app.close_turn_drill()
     with patch("opentab.tui.renderer.unicode_screen", return_value=False):
         ascii_lines = rnd.detail_turns(wf, 76)
         assert any(line.startswith("+") for line in ascii_lines)

@@ -4889,6 +4889,14 @@ class Renderer:
         for para in (g["full"] or "(no preceding prompt)").splitlines() or [""]:
             lines += textwrap.wrap(para, max(20, width)) or [""]
         lines.append("")
+        lines += self._turn_metric_strips(
+            [rows[i] for i in g["indices"]],
+            [costs[i] for i in g["indices"]],
+            width,
+            self.session_supports_context_curve(workflow.id),
+            first_index=g["indices"][0] + 1,
+        )
+        lines.append("")
         idx_w = max(2, len(str(len(rows))))
         # Preserve backend-provided main-agent labels and match web subagent markers.
         agent_w = min(
@@ -5042,13 +5050,15 @@ class Renderer:
         return groups
 
     @staticmethod
-    def _turn_metric_strips(rows, costs, width: int, context_curve: bool) -> list[str]:
-        """Multi-row bars sharing turn-index buckets but keeping separate scales."""
+    def _turn_metric_strips(
+        rows, costs, width: int, context_curve: bool, *, unit: str = "turn", first_index: int = 1
+    ) -> list[str]:
+        """Multi-row bars sharing index buckets but keeping separate metric scales."""
         n = len(rows)
         if not n:
             return []
         contexts = [None if r.get("depth") else context_size(r) or None for r in rows]
-        metrics = [("cost", list(costs), f"peak {money(max(costs, default=0.0))}", 3)]
+        metrics = [("cost", list(costs), f"peak {unit} {money(max(costs, default=0.0))}", 3)]
         if context_curve and any(v is not None for v in contexts):
             peak_context = max(v for v in contexts if v is not None)
             metrics.append(("context", contexts, f"peak {human_tokens(peak_context)}", 5))
@@ -5057,7 +5067,8 @@ class Renderer:
         tail_w = max(len(tail) for _label, _values, tail, _height in metrics)
         plot_w = max(8, width - gutter - tail_w - 3)
         repeat = max(1, min(4, plot_w // n))
-        cols = min(plot_w, n * repeat)
+        left, right = f"{unit} {first_index}", str(first_index + n - 1)
+        cols = min(plot_w, max(n * repeat, len(left) + len(right) + 1))
 
         def buckets(values) -> list[float | None]:
             out = []
@@ -5090,9 +5101,8 @@ class Renderer:
                 suffix = f"  {tail:>{tail_w}}" if row == 0 else ""
                 lines.append(f"{name:>{gutter}}│{''.join(cells)}{suffix}")
         lines.append(" " * gutter + "└" + "─" * cols)
-        left, right = "turn 1", str(n)
         if len(left) + len(right) + 1 > cols:
-            left = "1"
+            left = str(first_index)
         labels = left + " " * max(1, cols - len(left) - len(right)) + right
         lines.append(" " * (gutter + 1) + labels[:cols])
         return lines
@@ -5288,7 +5298,9 @@ class Renderer:
                 f"{human_tokens(sum(g['tokens'] for g in groups)):>{tok_w}} "
                 f"{money(total):>{cost_w}}"
             )
-        strips = self._turn_metric_strips(rows, costs, width, curve)
+        strips = self._turn_metric_strips(
+            groups, [g["cost"] for g in groups], width, False, unit="prompt"
+        )
         lines = strips + [""] + self._ruled_box(head, header, body, totals_row, [], width)
         # Rebase click maps from the box's derived body start, never a counted prologue.
         start = len(strips) + 1 + (self._ruled_body_start or 0)

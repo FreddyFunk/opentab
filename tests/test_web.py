@@ -293,15 +293,15 @@ def test_web_turns_carry_the_context_size_and_mark_compactions():
     assert "if (isCompaction(vs[i - 1], vs[i])) comps.push(i)" in js
     table = js.split("function turnsTable(", 1)[1].split("\nfunction ", 1)[0]
     assert "turnCompactions(turns)" in table
-    assert "turnCostContextStrip(turns)" in table
+    assert "turnCostContextStrip(groups, { prompts: true })" in table
     # NOT pushed into `body` (the per-group fold list): this table is folded to prompts by
     # default, so a marker inside a collapsed group would be a marker nobody sees.
     marker = next(ln for ln in table.splitlines() if "compact-row" in ln)
     assert "rows.push(" in marker and "body.push" not in marker
 
     strip = js.split("function turnCostContextStrip(", 1)[1].split("\nfunction ", 1)[0]
-    assert "const costs = turns.map(mCost);" in strip
-    assert "const contexts = turns.map(t => t.ctx || 0);" in strip
+    assert "const costs = turns.map(t => prompts ? t.cost : mCost(t));" in strip
+    assert "const contexts = turns.map(t => prompts ? 0 : (t.ctx || 0));" in strip
     assert "const costPeak" in strip and "const ctxPeak" in strip
     assert strip.index("const costPeak") < strip.index("const ctxPeak")
     assert "points[i].appendChild(s('rect'" in strip
@@ -309,7 +309,7 @@ def test_web_turns_carry_the_context_size_and_mark_compactions():
     assert "svg.appendChild(s('title'" in strip and "svg.appendChild(s('desc'" in strip
     assert "turns.map(pointLabel).join('; ')" in strip
     assert "tabindex" not in strip
-    assert table.index("turnCostContextStrip(turns)") < table.index("class: 'hint'")
+    assert table.index("turnCostContextStrip(groups,") < table.index("class: 'hint'")
 
 
 def test_web_session_extras_context_gated_by_curve_support():
@@ -536,18 +536,7 @@ def test_web_shipped_javascript_parses():
     assert result.returncode == 0, result.stderr
 
 
-def test_web_execution_details_execute_shipped_javascript():
-    node = shutil.which("node")
-    if node is None:
-        print("SKIP JavaScript execution detail check: Node.js is not installed (required in CI)")
-        return
-    source = _js_source()
-    # Run the real renderers and event handlers, without page startup or live requests.
-    shipped = source[: source.index("document.getElementById('trends').addEventListener")]
-    shipped += re.search(r"window.addEventListener\('popstate', e => \{.*?\n\}\);", source, re.S)[0]
-    result = subprocess.run(
-        [node, "-"],
-        input=r"""
+_WEB_DOM_JS = r"""
 const assert = require('node:assert/strict');
 class Node {
   constructor(tag, text = '') { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.text = text; this.style = {}; }
@@ -582,6 +571,22 @@ const history = {
   pushState(state, _, hash) { this.entries.push(this.state); this.state = state; assert.equal(hash, location.hash); },
   back() { this.state = this.entries.pop(); listeners.popstate({state:this.state}); }
 };
+"""
+
+
+def test_web_execution_details_execute_shipped_javascript():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript execution detail check: Node.js is not installed (required in CI)")
+        return
+    source = _js_source()
+    # Run the real renderers and event handlers, without page startup or live requests.
+    shipped = source[: source.index("document.getElementById('trends').addEventListener")]
+    shipped += re.search(r"window.addEventListener\('popstate', e => \{.*?\n\}\);", source, re.S)[0]
+    result = subprocess.run(
+        [node, "-"],
+        input=_WEB_DOM_JS
+        + r"""
 const make = (depth, real, api, tokens) => ({title:'same <img src=x onerror=alert(1)>', agent:'__proto__',
   model:'test/model', date:'2026-09-08T12:34:56Z', depth, real, api, tokens, tok:[1234,2345,3456,4000,4766,1000]});
 const fixtures = [make(0, 10, 10, 1000), make(1, 2, 20, 2000), make(2, 8, 30, 7000),
@@ -738,6 +743,127 @@ delete DATA.nodes.w1; render(); assert.ok(text().includes('no subagents in this 
     assert result.returncode == 0, result.stderr
 
     assert ".prompt-full{white-space:pre-wrap;overflow-wrap:anywhere" in ot.webpage._CSS
+
+
+def test_web_prompt_charts_execute_shipped_javascript():
+    node = shutil.which("node")
+    if node is None:
+        print("SKIP JavaScript chart check: Node.js is not installed (required in CI)")
+        return
+    source = _js_source()
+    shipped = source[: source.index("document.getElementById('trends').addEventListener")]
+    result = subprocess.run(
+        [node, "-"],
+        input=_WEB_DOM_JS
+        + r"""
+document.getElementById('opentab-data').textContent = JSON.stringify({
+  meta:{source:'test'}, workflows:[], nodes:{}, models:{}});
+"""
+        + shipped
+        + r"""
+const make = (promptId, real, ctx, extra = {}) => ({promptId, real, api:real, ctx,
+  time:'2026-09-09T12:00:00', model:'test/model', agent:'main', tokens:100, depth:0,
+  promptTitle:promptId, promptFull:promptId, ...extra});
+let turns = [make('a', 6, 90000), make('b', 4, 10000), make('b', 4, 20000),
+  make('b', 0, 0, {depth:1, agent:'explore', api:5}), make('a', 2, 2000)];
+const expiries = [{i:4, cause:'ttl', cost:2, idle:600, repaid:2000, ttl:300},
+  {i:2, cause:'reasoning', cost:1, detail:'low to high', repaid:1000}];
+let view;
+function render() { view = turnsTable(turns, expiries); }
+function all(el, tag) { return [...(el.tag === tag ? [el] : []), ...el.children.flatMap(n => all(n, tag))]; }
+function chart() { return all(view, 'svg')[0]; }
+function labels() { return all(chart(), 'text').map(n => n.textContent); }
+function points() { return all(chart(), 'g').filter(n => n.attrs.class === 'turn-point'); }
+function bars(point) { return all(point, 'rect').filter(n => n.attrs.class !== 'hit'); }
+function promptRows() { return all(view, 'tr').filter(n => n.className === 'prompt-row rowlink'); }
+function tips() { return points().map(p => all(p, 'title')[0].textContent); }
+function togglePrice() {
+  listeners.keydown({key:'$', target:{matches(){return false}}, preventDefault(){}});
+}
+MODE = 'real'; TURN_DRILL = null; render();
+// Consecutive runs, not unique IDs: the repeated a remains prompt 3.
+assert.equal(promptRows().length, 3);
+assert.equal(points().length, 3);
+assert.equal(all(chart(), 'title')[0].textContent, 'Cost by prompt');
+assert.equal(chart().attrs.role, 'img');
+assert.deepEqual(tips(), ['prompt 1\n$6.00', 'prompt 2\n$8.00', 'prompt 3\n$2.00']);
+assert.deepEqual(promptRows().map(r => r.children.at(-2).textContent), ['$6.00', '$8.00', '$2.00']);
+assert.ok(all(chart(), 'desc')[0].textContent.includes('peak prompt cost $8.00'));
+assert.ok(labels().includes('peak prompt $8.00')); // Aggregate exceeds every individual call.
+assert.ok(labels().includes('prompt 1') && labels().includes('prompt 3'));
+assert.ok(!chart().textContent.includes('context'));
+assert.deepEqual(points().map(p => bars(p)[0].attrs.height), [26.25, 35, 8.75]);
+assert.ok(view.textContent.includes('context compacted before turn 2'));
+assert.ok(view.textContent.includes('cache expired'));
+assert.ok(view.textContent.includes('reasoning effort low to high'));
+// Both SVG titles/descriptions and the actual pointer tooltip retain the values.
+points()[1].events.mouseenter();
+assert.equal(document.getElementById('tip').textContent, 'prompt 2\n$8.00');
+points()[1].events.mouseleave();
+assert.equal(document.getElementById('tip').hidden, true);
+togglePrice();
+assert.equal(MODE, 'api');
+assert.equal(tips()[1], 'prompt 2\n$13.00');
+assert.equal(promptRows()[1].children.at(-2).textContent, '$13.00');
+
+// Open the second prompt through its real click handler, with global indices 2-4.
+promptRows()[1].events.click();
+assert.equal(TURN_DRILL, 1);
+assert.equal(points().length, 3);
+assert.equal(all(chart(), 'title')[0].textContent, 'Cost and context by turn');
+assert.deepEqual(tips(), ['turn 2\n$4.00 · 10.0k context', 'turn 3\n$4.00 · 20.0k context',
+  'turn 4\n$5.00 · subagent context']);
+assert.ok(labels().includes('turn 2') && labels().includes('turn 4'));
+assert.ok(!labels().includes('turn 1') && !labels().includes('turn 5'));
+assert.ok(labels().includes('peak turn $5.00'));
+assert.ok(labels().includes('peak context 20.0k')); // Not the outside prompt's 90k.
+assert.deepEqual(all(all(view, 'tbody')[0], 'tr').map(r => r.children[0].textContent), ['2','3','4']);
+assert.deepEqual(points().map(p => bars(p).map(b => b.attrs.height)), [[28,17.5],[28,35],[35]]);
+const ctxHeights = points().slice(0, 2).map(p => bars(p)[1].attrs.height);
+togglePrice();
+assert.equal(TURN_DRILL, 1); // Reprice in place, never leave or select another prompt.
+assert.ok(labels().includes('peak turn $4.00'));
+assert.deepEqual(points().slice(0, 2).map(p => bars(p)[1].attrs.height), ctxHeights);
+assert.deepEqual(points().map(p => bars(p).map(b => b.attrs.height)), [[35,17.5],[35,35],[]]);
+assert.equal(tips()[2], 'turn 4\n$0.00 · subagent context');
+assert.equal(all(chart(), 'desc')[0].textContent.includes('turn 1\n'), false);
+
+// The later recurring id drills only its own run and keeps its global turn label.
+all(view, 'a')[0].events.click();
+assert.equal(TURN_DRILL, null);
+promptRows()[2].events.click();
+assert.equal(points().length, 1);
+assert.equal(tips()[0], 'turn 5\n$2.00 · 2.0k context');
+assert.ok(labels().includes('turn 5') && !labels().includes('turn 1'));
+
+// A missing main-thread measurement is explicit when other calls have context.
+turns[1].ctx = 0; TURN_DRILL = 1; render();
+assert.equal(tips()[0], 'turn 2\n$4.00 · no context recorded');
+// An all-subagent/no-context prompt keeps its cost chart, including zero-cost points.
+turns = turns.map(t => ({...t, ctx:0, depth:1})); render();
+assert.equal(all(chart(), 'title')[0].textContent, 'Cost by turn');
+assert.ok(!labels().includes('context'));
+assert.equal(points().length, 3);
+assert.deepEqual(points().map(p => bars(p).length), [1,1,0]);
+togglePrice();
+assert.deepEqual(tips(), ['turn 2\n$4.00','turn 3\n$4.00','turn 4\n$5.00']);
+assert.deepEqual(points().map(p => bars(p).length), [1,1,1]);
+// Unsupported context on ordinary main-thread calls behaves the same way.
+turns = turns.map(t => ({...t, depth:0, real:0, api:0})); render();
+assert.equal(points().length, 3);
+assert.ok(!chart().textContent.includes('context'));
+assert.ok(labels().includes('peak turn $0.00'));
+assert.ok(points().every(p => bars(p).length === 0));
+assert.ok(!chart().textContent.includes('NaN'));
+assert.equal(turnCostContextStrip([]), null);
+TURN_DRILL = null; turns = []; render();
+assert.equal(all(view, 'svg').length, 0);
+""",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_web_harness_browse_executes_shipped_javascript():
