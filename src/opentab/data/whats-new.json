@@ -1,6 +1,37 @@
 {
   "releases": [
     {
+      "version": "1.23.0",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            {
+              "text": "Inspect each subagent's work, cost share and token breakdown. Read its received prompt when retained, in the terminal or live browser.",
+              "hint": {"text": "Session > Subagents > execution"}
+            },
+            {
+              "text": "Browse earlier release highlights offline, without leaving OpenTab.",
+              "hint": {"text": "What's New > h/l for newer/older releases"}
+            }
+          ]
+        },
+        {
+          "title": "Improved",
+          "items": [
+            {"text": "Scroll long Turns tables and expanded traces more smoothly.", "availability": "tui"}
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            {"text": "Terminal resizes now clear leftover borders, including when opening in a popup.", "availability": "tui"}
+          ]
+        }
+      ],
+      "release_url": "https://github.com/hamidi-dev/opentab/releases/tag/v1.23.0"
+    },
+    {
       "version": "1.22.0",
       "sections": [
         {
