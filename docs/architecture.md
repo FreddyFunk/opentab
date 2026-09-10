@@ -35,7 +35,7 @@ package and installed command are both `opentab`.
 | `tui/app.py` | Application state, accounting projections, keyboard/mouse navigation |
 | `tui/renderer.py` | Terminal layout and painting |
 | `tui/bindings.py`, `tui/keymap.py` | Configurable bindings, contextual actions and help |
-| `web.py`, `webpage.py` | Report payload, HTTP server and self-contained HTML/CSS/JS |
+| `web.py`, `webpage.py`, `autostart.py` | Report payload, HTTP server, self-contained HTML/CSS/JS and user-service setup |
 | `pricing.py`, `data/models.json` | Rate lookup, cost calculations and generated catalog |
 | `formatting.py`, `heatmap.py`, `themes.py` | Text, charts and shared colour palettes |
 | `sources.py` | Harness discovery, selection and store construction |

@@ -147,6 +147,7 @@ sessions behind it. Filter as you type, change the date range, and keep explorin
 
 ```sh
 opentab web                        # open the live browser on localhost
+opentab web --autostart            # keep the live browser running (Linux / WSL)
 opentab --html report.html          # write a self-contained report
 opentab --demo --html demo.html    # anonymize it for sharing
 ```

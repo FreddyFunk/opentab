@@ -43,6 +43,30 @@ If OpenCode runs inside WSL, the default path
 (`~/.local/share/opencode/opencode.db`) just works. Either way, `--db` points
 OpenTab at any non-standard location.
 
+### Starting the web report automatically
+
+OpenTab can install `opentab web --headless` as a systemd user service. Recent WSL
+installations support systemd; enable it in `/etc/wsl.conf` if necessary:
+
+```ini
+[boot]
+systemd=true
+```
+
+Then run `wsl.exe --shutdown` from PowerShell or Command Prompt, reopen the distro,
+and install the service:
+
+```sh
+opentab web --autostart
+```
+
+The report is then available from Windows at `http://localhost:8321/` whenever the
+WSL distro and your user systemd session are running. WSL does not start a distro
+merely because Windows booted, so this is distro startup rather than a Windows
+logon task. Use `opentab web --autostart status` to check it and
+`opentab web --autostart remove` to remove it. Pass web options while installing
+(for example `--port 9000` or a Windows-side `--vscode-dir`); reinstall to change them.
+
 ### Reading the Windows-side VS Code store
 
 Copilot Chat in VS Code works the same way from WSL: chat sessions are stored by the

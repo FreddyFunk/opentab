@@ -454,6 +454,7 @@ def _build_parser() -> argparse.ArgumentParser:
         html=None,
         serve=False,
         web=False,
+        autostart=None,
         refresh_models=False,
         timings=False,
         keymap=False,
@@ -485,7 +486,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "to write the static page and exit instead of serving.",
     )
     _add_global_args(web)
-    web.add_argument(
+    web_output = web.add_mutually_exclusive_group()
+    web_output.add_argument(
         "--html",
         nargs="?",
         const="opentab-report.html",
@@ -500,6 +502,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="serve but do NOT open a browser (Ctrl-C stops it); the bare `opentab web` "
         "opens one. Either way the live per-session Turns/Tools endpoints and the "
         "data-refresh button are served",
+    )
+    web_output.add_argument(
+        "--autostart",
+        nargs="?",
+        const="install",
+        choices=("install", "remove", "status"),
+        metavar="ACTION",
+        help="manage a systemd user service for the live browser: install (the default), "
+        "remove, or status. Works on Linux and on WSL with systemd enabled",
     )
     _focus_help(web, gdests, {"source", "demo", "theme", "port", "bind"})
     # The verb is `cost` to avoid colliding with agent working/waiting status;
@@ -669,7 +680,9 @@ def _apply_subcommand(args: argparse.Namespace) -> None:
     # Map subcommands onto the legacy namespace so there is one dispatch path.
     command = getattr(args, "command", None)
     if command == "web":
-        if args.html is not None:
+        if args.autostart is not None:
+            args.serve = args.web = False
+        elif args.html is not None:
             args.serve = args.web = False
         elif args.headless:
             args.serve, args.web = True, False
@@ -1898,6 +1911,10 @@ def main() -> int:
     if not getattr(args, "demo", False):
         # Migrate here, not in path getters used by help/doctor; demo touches no files.
         paths.migrate_legacy_caches()
+    if getattr(args, "autostart", None) is not None:
+        from opentab.autostart import configure
+
+        return configure(args.autostart, args)
     if getattr(args, "refresh_models", False):
         return refresh_models_command()
     if getattr(args, "keymap", False):

@@ -9,6 +9,7 @@ the TUI can't.
 opentab web                     # serve locally and open the default browser
 opentab web --headless          # serve without opening a browser
 opentab web --html report.html  # write a static file and exit
+opentab web --autostart         # install and start a user service
 ```
 
 The older `--web`, `--serve`, and `--html` flags remain available.
@@ -147,6 +148,28 @@ cache markers in the overview and the full-session **Context** tab are unchanged
 The page's refresh button re-reads local data; it does not automatically re-pull
 remote machines. A pulled machine's own refresh button requests a new summary.
 See [fleet refresh](machines.md#refresh-and-offline-history) for the distinction.
+
+### Start the live report automatically
+
+On Linux, install the live report as a systemd user service:
+
+```sh
+opentab web --autostart                    # install, enable, and start it
+opentab web --autostart status             # show enabled/running state
+opentab web --autostart remove             # stop and remove it
+```
+
+The installer records the current Python environment and web options, including
+`--harness`, source-path overrides, `--port`, and `--bind`, then runs the service
+headlessly. Re-run the install command to replace its configuration. Logs are
+available through `journalctl --user -u opentab-web`.
+
+The unit is stored at `$XDG_CONFIG_HOME/systemd/user/opentab-web.service` (normally
+`~/.config/systemd/user/`). It starts with that user's systemd session; it does not
+run as root or open the browser automatically.
+
+This also works in WSL once systemd is enabled. See the
+[WSL instructions](windows.md#starting-the-web-report-automatically).
 
 ## Security
 
